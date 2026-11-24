@@ -203,6 +203,21 @@ class ApiClient:
         self.extras = None  # 由 conftest 绑定 pytest-html 的 extras fixture
         self.last_login: Optional[ApiResult] = None  # 最近一次登录响应，供取用户信息
 
+    def clear_cookies(self) -> 'ApiClient':
+        """清空本会话累积的 Cookie。
+
+        同一个 ApiClient 共用一个 requests.Session，登录 / 注册返回的 Set-Cookie
+        会一直带着。若被测服务 Cookie 优先于 ``Authorization`` 头（本项目的
+        shopping 后端就是：CookieUtil.token 先读 Cookie 再用请求头兜底），
+        那么"一个客户端先后登录两个身份"时，后一个身份的 Cookie 会覆盖前一个
+        请求头，造成**静默串号**——断言看起来在测 A，实际请求的是 B。
+
+        多身份场景（越权 / 会话隔离）应各用独立 ApiClient；确实要复用同一
+        客户端时，切换身份前先调用本方法。
+        """
+        self.session.cookies.clear()
+        return self
+
     # ---------- 请求 ----------
 
     def request(self, method: str, path: str, *, json_body: Any = None,

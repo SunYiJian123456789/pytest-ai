@@ -295,6 +295,27 @@ def api(extras):
 
 
 @pytest.fixture
+def new_client():
+    """按需创建独立 ApiClient（各自独立 cookie jar），用于多身份场景。
+
+    共享的 api fixture 只有一个 requests.Session，登录 / 注册返回的 Set-Cookie
+    会累积；本后端 Cookie 优先于 Authorization 头，同一客户端先后注册两个用户
+    会静默串号（请求头写着 A，服务端按 cookie 认成 B）。越权、会话隔离这类
+    「同时存在多个身份」的用例必须各用独立客户端。
+    """
+    created = []
+
+    def factory(token=None):
+        client = ApiClient(BASE_URL, TIMEOUT, auth=USER_AUTH, default_token=token)
+        created.append(client)
+        return client
+
+    yield factory
+    for client in created:
+        client.session.close()
+
+
+@pytest.fixture
 def cleaner(api, tokens):
     instance = Cleaner(api, tokens)
     yield instance

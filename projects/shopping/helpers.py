@@ -12,11 +12,11 @@ def uid(prefix: str = '') -> str:
     return prefix + uuid.uuid4().hex[:8].upper()
 
 
-def register_isolated_user(api, cleaner, prefix='APIU'):
-    """注册一个专属测试用户并返回其 token。
+def register_user(api, cleaner, prefix='APIU'):
+    """注册一个专属测试用户，返回 {username, token, user}，由 cleaner 统一删除。
 
     购物车按 user_id 存储而非 token，因此共享 demo 账号时各用例的购物车会互相
-    干扰。需要操作购物车的用例应各自注册独立用户，由 cleaner 统一删除。
+    干扰。需要操作购物车、或需要核对"接口返回的到底是谁"的用例应各自注册独立用户。
     """
     username = uid(prefix)
     resp = api.post('/api/auth/register', json_body={
@@ -24,7 +24,16 @@ def register_isolated_user(api, cleaner, prefix='APIU'):
     })
     assert resp.ok, '注册隔离用户失败: %r' % (resp,)
     cleaner.user(username)
-    return extract(resp, 'data.token')
+    return {
+        'username': username,
+        'token': extract(resp, 'data.token'),
+        'user': extract(resp, 'data.user'),
+    }
+
+
+def register_isolated_user(api, cleaner, prefix='APIU'):
+    """只要 token 的简写（购物车、支付等只需要凭证的用例用这个）。"""
+    return register_user(api, cleaner, prefix)['token']
 
 
 def product_payload(name: str, **overrides):

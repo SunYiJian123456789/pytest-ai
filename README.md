@@ -3,7 +3,7 @@
 本工程已改造为 **通用内核 + 业务项目** 两层结构：
 
 - `framework/`：与被测系统无关的测试内核（请求、断言、数据驱动、清理、报告、脚手架）。
-- `projects/shopping/`：现成的 shopping 电商系统用例，118 条全绿，作为接入范例。
+- `projects/shopping/`：现成的 shopping 电商系统用例，149 条全绿，作为接入范例。
 - 换一个系统时只新增 `projects/<项目名>/`，改配置和用例，**framework 代码不动**。
 
 ## 1. 目录结构
@@ -22,12 +22,12 @@ D:/shopping-api-automation/
 │   ├── scaffold.py                  新项目脚手架：python -m framework.scaffold
 │   └── project_template/            脚手架模板
 ├── projects/
-│   ├── shopping/                    shopping 业务层（138 条用例）
+│   ├── shopping/                    shopping 业务层（149 条用例）
 │   │   ├── config.py                账号、库表、路径、报告标签
 │   │   ├── conftest.py              api / tokens / cleaner fixtures
 │   │   ├── helpers.py               商品构造、独立用户、落库断言
 │   │   ├── dbclean.py               shopping 业务 SQL
-│   │   ├── data.py + data/          YAML 入口与 11 组数据集（含权限矩阵、响应契约）
+│   │   ├── data.py + data/          YAML 入口与 12 组数据集（含权限矩阵、越权矩阵、响应契约）
 │   │   ├── testcases/               14 个测试模块
 │   │   └── docs/接口清单.md          接口与用例对照
 │   └── <新项目>/                    由脚手架生成，按配置接入
@@ -112,8 +112,28 @@ permission_matrix:
 ```
 
 新增场景只加一行 YAML，不写 Python。`token_from: user_b` 可指向另一角色的 token，
-用于"用 A 的凭证访问 B 的资源"这类跨用户场景。shopping 有 14 条矩阵用例
+用于"用 A 的凭证访问 B 的资源"这类跨用户场景；路径里的资源 id 用
+`/api/cart/${cart_item_id}` 占位，调用时传 `variables={'cart_item_id': ...}` 渲染
+（整串占位保留原始类型，id 仍是 int）。shopping 有 15 条矩阵用例
 （`test_13_permissions.py`），内核单测见 `framework/tests/`。
+
+### 越权访问（IDOR）
+
+权限矩阵管的是"角色能不能进这个接口"，管不了"同一角色下 A 能不能动 B 的数据"。
+`test_16_idor.py` 补这一层，判定标准是**副作用**而不是状态码：
+
+- 攻击者用**自己的合法 token**、拿**受害者的真实资源 id** 发起写操作；
+- 断言受害者数据原样（项还在、数量未变）、攻击者列表里不出现受害者数据、
+  两个 token 各自 `/api/auth/me` 返回自己；
+- 后端把越权做成 `200 + 静默无效` 或 `403/404` 都算通过，打成 `500` 算失败。
+
+shopping 用户端只有购物车项带客户端可控 id（后端 SQL 层写死了 `AND user_id = #{userId}`），
+所以 4 条写攻击（改 99 / 改 0 / 改负数 / 删除）+ 列表隔离 + 清空隔离 + 支付结算归属
++ 支付记录隔离 + 身份不串，共 9 条。
+
+**多身份注意**：`requests.Session` 会累积 `Set-Cookie`，而 shopping 后端 Cookie 优先于
+`Authorization` 头（`CookieUtil.token`），同一个 `ApiClient` 先后注册两个用户会静默串号。
+多身份用例用 `new_client` fixture 各开一个客户端；复用同一客户端时先 `clear_cookies()`。
 
 ### 鉴权通配（AuthSpec）
 
@@ -130,7 +150,7 @@ permission_matrix:
 | `<前缀>AUTH_COOKIE_NAME` | 空 | Cookie 模式下关心的 cookie 名 |
 
 `auto` 模式登录后自动探测：能提取到 token 就走 header，否则有 Cookie 就走 cookie。
-显式传 `token=` 的调用始终优先注入请求头，因此 shopping 现有 118 条业务用例无需改动。
+显式传 `token=` 的调用始终优先注入请求头，因此 shopping 现有 149 条业务用例无需改动。
 
 ### 重试与链路追踪
 
@@ -244,11 +264,11 @@ def test_chain(api, tokens, cleaner, ctx):
 
 shopping 的 `test_update_product_name` 是完整示范，`helpers.py:create_product`
 是固定链路的封装示范（提取 ID 后立即登记 cleaner，中途失败也不留脏数据）。
-内核单测：`python -m pytest framework/tests -o addopts= -q`（13 条）。
+内核单测：`python -m pytest framework/tests -o addopts= -q`（90 条）。
 
 ## 5. shopping 项目现状
 
-### 覆盖范围（140 条，全部通过）
+### 覆盖范围（149 条，全部通过）
 
 | 模块 | 用例数 | 模块 | 用例数 |
 | --- | --- | --- | --- |
@@ -259,7 +279,7 @@ shopping 的 `test_update_product_name` 是完整示范，`helpers.py:create_pro
 | 购物车 | 12 | 审批流 | 10 |
 | 虚拟支付 | 11 | 图片上传 | 3 |
 | 登录后权限矩阵 | 15 | 响应契约校验 | 5 |
-| 场景编排 | 2 | | |
+| 场景编排 | 2 | 越权访问（IDOR） | 9 |
 
 关键断言：`/api/health` 状态 UP、统一响应包装、上下架过滤、¥1000/¥1001 支付边界与订单落库、
 用户/管理 token 双向隔离、审批通过后才入库、有商品分类禁止删除、图片上传后可回源。
@@ -273,9 +293,9 @@ shopping 的 `test_update_product_name` 是完整示范，`helpers.py:create_pro
 
 ### 数据驱动
 
-`projects/shopping/data/api_cases.yaml` 共 11 组数据集：注册短账号、未登录接口清单、非法金额、
+`projects/shopping/data/api_cases.yaml` 共 12 组数据集：注册短账号、未登录接口清单、非法金额、
 管理端未登录接口、商品参数校验、上下架状态值、非法状态值、批量状态值、商品表单模板，
-以及权限矩阵 `permission_matrix`、响应契约 `response_schemas`。
+以及权限矩阵 `permission_matrix`、越权矩阵 `idor_matrix`、响应契约 `response_schemas`。
 `cases('数据集名', '字段1', '字段2')` 直接作为 `parametrize` 参数，增删 YAML 行即增减用例；
 `records('数据集名')` 保留整行 dict，适合字段多的矩阵场景。
 
@@ -283,7 +303,7 @@ shopping 的 `test_update_product_name` 是完整示范，`helpers.py:create_pro
 
 `reports/report.html` 是单文件自包含报告，每次执行自动增强：
 
-- KPI 卡与通过率环形图、12 模块分布条形图、TOP 14 接口统计（均耗/峰值/失败数）。
+- KPI 卡与通过率环形图、16 模块分布条形图、TOP 14 接口统计（均耗/峰值/失败数）。
 - **双层状态分布**：HTTP 2xx/4xx/5xx 与业务 code 分开统计。shopping 后端把失败封装为
   `HTTP 200 + code 400/401/404`，所以两者口径不同；负向用例主动触发的 4xx/5xx 不代表测试失败。
 - 请求明细：方法徽章、HTTP 状态、业务 code、耗时、左右双栏请求/响应，token 脱敏。
@@ -412,3 +432,26 @@ shopping 的 `test_update_product_name` 是完整示范，`helpers.py:create_pro
   `API_PREFLIGHT_STRICT=0` 只告警不中止。
 - **内核单测**：`framework/tests` 扩到 **70 条**（新增 23 条：失败聚合、WARN/SKIP 分级、
   strict/enabled 开关、消息单行化与截断、Ctrl+C 不被吞、records 副本、环境变量默认值）。
+
+## 14. 越权访问（IDOR，2026-11-24）
+
+- **新增 `test_16_idor.py`（9 条）**：补齐权限矩阵覆盖不到的一层——同一角色下
+  「A 能不能动 B 的数据」。判定标准是副作用而非状态码：受害者数据必须原样，
+  越权请求打成 `500` 也算失败（未处理异常不是「拒绝」）。
+- **数据驱动**：新增 `idor_matrix` 数据集（4 条写攻击：改 99 / 改 0 / 改负数 / 删除），
+  `role` 写资源归属者、`token_from` 写实际请求者——这正是 `token_from` 的设计用途。
+- **内核增强**：`check_permission` 支持 `variables`，路径 / params / json_body 里的
+  `${name}` 统一按 `CaseContext.render` 渲染（整串占位保留原始类型）；渲染后仍残留
+  占位符直接报错，避免把模板当真实路径发出、错判成接口 404。顺手修掉 `label` 用原始
+  大小写、与实际请求方法不一致的小瑕疵。
+- **发现并规避一个框架陷阱**：shopping 后端 `CookieUtil.token` 是 **Cookie 优先、
+  Authorization 兜底**，而 `requests.Session` 会累积 `Set-Cookie`；同一 `ApiClient`
+  先后注册两个用户时，后者的 Cookie 会覆盖前者的请求头，造成静默串号（首轮 9 条全部
+  因此失败）。新增 `ApiClient.clear_cookies()` + `new_client` fixture（每身份独立会话）。
+- **后端实测行为**：4 种越权写操作均返回 `HTTP 200 / code 200 / success` 但零副作用
+  （`CartMapper` 的 SQL 全部带 `AND user_id = #{userId}`）；列表、清空、支付结算、
+  支付记录、`/api/auth/me` 均按 token 归属隔离。
+- **断言有效性验证**：做了一次变异测试——用受害者自己的 token 真改数量 / 真删项，
+  断言分别报出「数量被越权改动」「购物车项被越权删除」，确认不是永远绿的假用例。
+- 回归：串行 **149 passed（9.08s）**、`-n 4` **149 passed（6.17s）**、`ruff check .` 通过；
+  内核单测 70 → **90 条**（新增权限矩阵 20 条：行解析、凭证解析、变量渲染、断言消息）。

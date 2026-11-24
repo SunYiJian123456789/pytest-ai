@@ -72,7 +72,10 @@ MODULE_LABELS = {
     'test_10_admin_categories.py': '分类管理',
     'test_11_admin_approvals.py': '审批流',
     'test_12_upload.py': '图片上传',
+    'test_13_permissions.py': '权限矩阵',
+    'test_14_contract.py': '响应契约',
     'test_15_scenarios.py': '场景编排',
+    'test_16_idor.py': '越权访问（IDOR）',
 }
 REPORT_NOTES = (
     '后端把多数失败封装为 HTTP 200 + code 400/401/404，因此 HTTP 2xx 数量大于业务成功数量；'

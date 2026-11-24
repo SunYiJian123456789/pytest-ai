@@ -192,6 +192,41 @@ permission_matrix:
     expect_http: 200
     expect_code: 200
 
+# ===== 越权访问（IDOR）矩阵 =====
+# 场景：攻击者用自己的合法 token，去操作受害者名下的资源 id。
+# 数据结构同权限矩阵，另有两点约定：
+#   1. role 写资源归属者（victim），token_from 写实际请求者（attacker）——
+#      这就是 token_from 的设计用途：「A 的 token 访问 B 的资源」；
+#   2. path 里的 ${cart_item_id} 由用例注入受害者的真实购物车项 id。
+# 断言口径：不锁死 HTTP 状态码（403/404/200 都可能），只看「受害者的数据有没有被改动」。
+idor_matrix:
+  - label: 越权修改他人购物车项数量为 99
+    role: victim
+    token_from: attacker
+    method: PUT
+    path: /api/cart/${cart_item_id}
+    json_body:
+      quantity: 99
+  - label: 越权把他人购物车项数量改为 0（删除分支）
+    role: victim
+    token_from: attacker
+    method: PUT
+    path: /api/cart/${cart_item_id}
+    json_body:
+      quantity: 0
+  - label: 越权把他人购物车项数量改为负数
+    role: victim
+    token_from: attacker
+    method: PUT
+    path: /api/cart/${cart_item_id}
+    json_body:
+      quantity: -5
+  - label: 越权删除他人购物车项
+    role: victim
+    token_from: attacker
+    method: DELETE
+    path: /api/cart/${cart_item_id}
+
 # ===== 响应契约（framework.schema 数据驱动）=====
 # 用 JSON Schema Draft 7 描述响应结构；用例只选场景，结构改 YAML 即可。
 response_schemas:
