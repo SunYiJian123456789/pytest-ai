@@ -19,6 +19,7 @@ from pathlib import Path
 
 from framework.cleanup import dump_log, inject_banner, load_logs
 from framework.config import ROOT, env
+from framework.preflight import records as preflight_records
 
 # 业务项目可覆盖这些选项；enhancer 只消费这份字典，不 import 业务模块
 REPORT_OPTIONS: dict = {
@@ -75,6 +76,11 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
         'total': sum(counts.values()),
         **counts,
     }
+    # 启动体检结果（哪几项通过/告警、各耗时多少）：环境问题事后可追溯，
+    # xdist 下主进程不跑体检，此时为空、不写该键
+    preflight = preflight_records()
+    if preflight:
+        summary['preflight'] = preflight
     try:
         target = ROOT / 'reports' / 'run_summary.json'
         target.parent.mkdir(parents=True, exist_ok=True)

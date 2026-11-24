@@ -13,9 +13,11 @@ from framework import hooks
 from framework.cleanup import CleanupRegistry, remove_uploaded_files
 from framework.client import ApiClient
 from framework.extract import CaseContext, extract
+from framework.preflight import Check, Preflight, Skipped
 from projects.shopping import dbclean
 from projects.shopping.config import (
-    ADMIN_ACCOUNTS, ADMIN_AUTH, BASE_URL, DATA_SOURCE, MODULE_LABELS, MYSQL_DATABASE,
+    ADMIN_ACCOUNTS, ADMIN_AUTH, BASE_URL, DATA_SOURCE, DB_STRICT, MODULE_LABELS,
+    MYSQL_DATABASE, MYSQL_HOST, MYSQL_PORT, MYSQL_USER, PREFLIGHT_TIMEOUT,
     PROJECT_LABEL, REPORT_NOTES, STORE_PASSWORD, STORE_USERNAME, TIMEOUT, UPLOAD_DIR,
     USER_AUTH,
 )
@@ -33,6 +35,143 @@ def pytest_configure(config):
         notes=[REPORT_NOTES],
         success_code=200,
     )
+
+
+# ---------- 启动体检 ----------
+
+# 体检时登录一次，tokens fixture 直接复用，避免「体检登录 → 用例再登录」重复一轮
+_TOKENS: dict = {}
+
+
+def _fill_tokens(state: dict) -> None:
+    """用户端 + 管理端各角色登录一次，写入 state（键与 tokens fixture 一致）。
+
+    全部成功才写入：避免「用户登录成功、admin 失败」时留下半套 token，
+    后续用例以 KeyError 的形式报错，掩盖真正原因。
+    失败集中成一条消息——密码改一个就跑一次，成本太高。
+    """
+    fresh: dict = {}
+    failures = []
+
+    user_client = ApiClient(BASE_URL, TIMEOUT, auth=USER_AUTH)
+    try:
+        user_client.login(STORE_USERNAME, STORE_PASSWORD)
+    except AssertionError as exc:
+        failures.append('商城用户 %s — %s' % (STORE_USERNAME, exc))
+    else:
+        fresh['user'] = user_client.default_token
+        fresh['user_info'] = extract(user_client.last_login, 'data.user')
+
+    for role, (username, password) in ADMIN_ACCOUNTS.items():
+        client = ApiClient(BASE_URL, TIMEOUT, auth=ADMIN_AUTH)
+        try:
+            client.login(username, password)
+        except AssertionError as exc:
+            failures.append('管理端 %s（%s）— %s' % (role, username, exc))
+            continue
+        fresh[role] = client.default_token
+        fresh[role + '_info'] = extract(client.last_login, 'data.admin')
+
+    if failures:
+        raise AssertionError('；'.join(failures))
+    state.update(fresh)
+
+
+def _reason(result) -> str:
+    """把 requests 的长异常压成一句话：体检消息要能一眼看完。"""
+    text = str(result.message or '')
+    if '10061' in text or 'Connection refused' in text or '积极拒绝' in text:
+        return '连接被拒绝（服务未启动或端口不对）'
+    if '10060' in text or 'timed out' in text or 'timeout' in text.lower():
+        return '连接超时'
+    if 'getaddrinfo' in text or 'Name or service not known' in text:
+        return '域名解析失败'
+    return text[:120] or '无响应'
+
+
+def _preflight_checks() -> list:
+    """启动体检项：服务可达 → 服务自检 → 数据库可用 → 登录可用。
+
+    全部只读、快速失败；某项挂掉不影响后面的检查继续跑完（一轮把问题说全）。
+    前置条件不满足时抛 Skipped：把「没测」与「测了不通过」分开，别把未执行显示成失败。
+    """
+    probe: dict = {}
+    # 体检探活不重试、不注入 trace：这是诊断请求，重试只会把「服务没起」的等待翻倍
+    probe_client = ApiClient(BASE_URL, PREFLIGHT_TIMEOUT,
+                             retry_enabled=False, trace_enabled=False)
+
+    def health():
+        """一次 /api/health 探活结果，多项检查共用（后端没起时不重复等超时）。"""
+        if 'result' not in probe:
+            probe['result'] = probe_client.get('/api/health')
+        return probe['result']
+
+    def service_up():
+        result = health()
+        return result.status == 200 and result.ok
+
+    def service_reachable():
+        result = health()
+        if result.status == 0:
+            raise AssertionError('无法连接 %s：%s' % (BASE_URL, _reason(result)))
+        if result.status != 200 or not result.ok:
+            raise AssertionError('GET /api/health → HTTP %s / code %s：%s'
+                                 % (result.status, result.code, _reason(result)))
+        return 'HTTP 200 · code 200 · %d ms' % result.elapsed_ms
+
+    def service_healthy():
+        if not service_up():
+            raise Skipped('后端不可达（见上一项），未执行健康自检')
+        data = health().data
+        status = data.get('status') if isinstance(data, dict) else None
+        if status != 'UP':
+            raise AssertionError('健康自检 status=%r，期望 UP' % (status,))
+        return 'status=UP · %s' % (data.get('database') or '-')
+
+    def database_ready():
+        if not dbclean.available():
+            raise AssertionError('PyMySQL 未安装或未配置数据库名')
+        result = dbclean.execute('SELECT 1 AS ok')
+        if result.skipped:
+            raise AssertionError('数据库驱动不可用')
+        if not result.ok:
+            raise AssertionError(result.error)
+        return '%s@%s:%s/%s' % (MYSQL_USER, MYSQL_HOST, MYSQL_PORT, MYSQL_DATABASE)
+
+    def login_ready():
+        if not service_up():
+            raise Skipped('后端不可达（见上一项），未执行登录校验')
+        _fill_tokens(_TOKENS)
+        return '用户 1 个 + 管理端 %d 个角色登录成功' % len(ADMIN_ACCOUNTS)
+
+    return [
+        Check('后端可达', service_reachable,
+              hint='先启动被测服务（D:/shopping/start-backend.bat）；'
+                   '并确认 .env 的 SHOPPING_API_BASE_URL=%s' % BASE_URL),
+        Check('服务自检', service_healthy, required=False,
+              hint='/api/health 的 status 不是 UP：检查数据库连接与图片存储目录'),
+        Check('数据库可用', database_ready, required=DB_STRICT,
+              hint='检查 .env 的 SHOPPING_MYSQL_*；本地无库可忽略（落库断言自动跳过），'
+                   'CI 需 DB_STRICT=1 且库可用'),
+        Check('登录可用', login_ready,
+              hint='核对 .env 的 SHOPPING_STORE_USER/PASSWORD '
+                   '与 SHOPPING_ADMIN_* / REVIEWER_* / OPERATOR_*'),
+    ]
+
+
+def pytest_sessionstart(session):
+    """收集用例前做一次体检：环境没备好就一条消息中止。
+
+    不做体检时，后端没启动会让 140 条用例各报一次 ConnectionRefused，
+    看报告的人要翻完所有红叉才发现「服务没起」。现在直接一条 ERROR 说清。
+
+    - 失败：抛 pytest.UsageError → 终端一行 ERROR + 退出码 4，用例零执行；
+    - ``--collect-only`` 不联网（收集阶段不需要服务）；
+    - ``API_PREFLIGHT_ENABLED=0`` 关闭；``API_PREFLIGHT_STRICT=0`` 只告警不中止。
+    """
+    if session.config.getoption('collectonly', False):
+        return
+    Preflight(_preflight_checks()).run_or_exit()
 
 
 class Cleaner(CleanupRegistry):
@@ -139,22 +278,12 @@ class Cleaner(CleanupRegistry):
 def tokens():
     """三种角色各登录一次，跨用例复用；登录走 AuthSpec，换系统只改配置。
 
-    用户端与管理端用各自的 AuthSpec（登录路径/字段/token 位置可配），
-    UserInfo 从 last_login 响应按路径提取，避免散落的 resp.data['token']。
+    正常由启动体检（pytest_sessionstart）填好缓存，这里直接复用；
+    体检被关闭（API_PREFLIGHT_ENABLED=0）时兜底登录，行为与改造前一致。
     """
-    result = {}
-
-    user_client = ApiClient(BASE_URL, TIMEOUT, auth=USER_AUTH)
-    user_client.login(STORE_USERNAME, STORE_PASSWORD)
-    result['user'] = user_client.default_token
-    result['user_info'] = extract(user_client.last_login, 'data.user')
-
-    for role, (username, password) in ADMIN_ACCOUNTS.items():
-        client = ApiClient(BASE_URL, TIMEOUT, auth=ADMIN_AUTH)
-        client.login(username, password)
-        result[role] = client.default_token
-        result[role + '_info'] = extract(client.last_login, 'data.admin')
-    return result
+    if not _TOKENS.get('user') or not _TOKENS.get('admin'):
+        _fill_tokens(_TOKENS)
+    return _TOKENS
 
 
 @pytest.fixture

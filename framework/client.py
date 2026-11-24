@@ -103,6 +103,11 @@ class ApiResult:
             self.message, self.url, self.trace_id or '-', self.attempts,
         )
 
+    def describe(self) -> str:
+        """一行摘要（HTTP 状态 / 业务码 / 消息）：异常消息与进度日志用，别塞整段 repr。"""
+        code = self.code if self.code is not None else '-'
+        return 'HTTP %s / code %s / %s' % (self.status, code, self.message or '无消息')
+
 
 def mask_token(token: Optional[str]) -> str:
     if not token:
@@ -304,7 +309,8 @@ class ApiClient:
         body.update(extra)
         result = self.post(self.auth.login_path, json_body=body)
         if not result.ok:
-            raise AssertionError('登录失败：%r' % (result,))
+            # 用一行摘要而不是 repr：登录失败最常被体检消息引用，要能一眼读完
+            raise AssertionError('登录失败：%s；%s' % (result.describe(), result.url))
         self.last_login = result
         token = self.auth.token_from(result.payload)
         if self.auth.mode == 'auto':

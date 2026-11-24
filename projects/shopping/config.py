@@ -15,6 +15,8 @@ CFG = Settings('SHOPPING_')
 # 被测服务：Spring Boot 后端（8080），不是 Vite 开发服务器
 BASE_URL = CFG.get('API_BASE_URL', 'http://127.0.0.1:8080').rstrip('/')
 TIMEOUT = CFG.floating('API_TIMEOUT', 10.0)
+# 启动体检的请求超时：体检要快速失败，不跟 10s 业务超时走（后端没起时不让开场卡住）
+PREFLIGHT_TIMEOUT = CFG.floating('PREFLIGHT_TIMEOUT', 3.0)
 
 # 鉴权约定：用户端与管理端登录路径不同，各用一份 AuthSpec（闭环示范）
 USER_AUTH = AuthSpec.from_settings(CFG)  # SHOPPING_AUTH_* → /api/auth/login

@@ -156,6 +156,38 @@ permission_matrix:
 （如 `data.not_exists`）并附完整响应体。`assert_schema(result, schema)` 校验整个响应，
 `assert_data_schema(result, schema)` 只校验业务数据层。
 
+### 启动体检（preflight）
+
+`framework/preflight.py` 把「服务可达 → 服务自检 → 数据库可用 → 登录可用」做成一组有序检查，
+在用例收集之前（`pytest_sessionstart`）跑一次。环境没备好时只输出一条消息、退出码 4、
+**用例零执行**——不再出现「后端没启动，140 条各报一次 ConnectionRefused」那种要翻完红叉
+才知道根因的报告。
+
+```text
+ERROR: 启动体检未通过：4 项检查中 1 项失败、2 项跳过，本次未执行任何用例。
+
+  [FAIL] 后端可达 — 无法连接 http://127.0.0.1:8080：连接被拒绝（服务未启动或端口不对）（2069 ms）
+         提示：先启动被测服务（D:/shopping/start-backend.bat）；并确认 .env 的 SHOPPING_API_BASE_URL=...
+  [SKIP] 服务自检 — 后端不可达（见上一项），未执行健康自检（0 ms）
+  [ OK ] 数据库可用 — root@localhost:3306/shopping_db（142 ms）
+  [SKIP] 登录可用 — 后端不可达（见上一项），未执行登录校验（0 ms）
+```
+
+| 环境变量（无前缀） | 默认值 | 说明 |
+| --- | --- | --- |
+| `API_PREFLIGHT_ENABLED` | `1` | `0` 关闭体检；`--collect-only` 始终跳过（收集不需要服务） |
+| `API_PREFLIGHT_STRICT` | `1` | `0` 时必检项失败只告警不中止（应急放行） |
+
+四种结果：`OK` / `WARN`（`required=False` 的检查失败，如本地无数据库）/ `SKIP`
+（前置条件未满足，不把「没测」显示成「失败」）/ `FAIL`（必检项失败，中止）。
+
+设计取舍：检查项逐个跑完、不因前一项失败而提前结束（一轮把问题说全）；探活复用同一次 HTTP
+请求并关闭重试（避免把「服务没起」的等待翻倍）；体检顺带登录一次并缓存 token，`tokens`
+fixture 直接复用，不重复登录；结果写入 `run_summary.json` 的 `preflight` 字段，环境问题事后可追溯。
+
+新项目接入：在 `projects/<项目>/conftest.py` 的 `pytest_sessionstart` 里
+`Preflight([...]).run_or_exit()`，四个检查项可照抄 `projects/shopping/conftest.py`。
+
 ## 4. framework 内核能力
 
 | 模块 | 能力 |
@@ -166,6 +198,7 @@ permission_matrix:
 | `data.py` | YAML 数据集校验、单字段返回标量列表、多字段返回 tuple，直接喂给 `parametrize` |
 | `extract.py` | 响应值提取与用例内依赖链：`extract` 点分路径 + 数组下标，`CaseContext` 记录变量并渲染 `${name}` 占位符 |
 | `schema.py` | 响应契约校验（JSON Schema Draft 7）：校验字段存在性/类型/范围，失败定位到具体路径并附完整响应 |
+| `preflight.py` | 启动体检：检查项有序执行、结果分级（OK/WARN/SKIP/FAIL）、失败聚合成一条 `ERROR` 中止整轮 |
 | `scenario.py` | YAML 场景编排：一个 YAML 块描述多步业务链路（request/extract/assert/cleanup），`${}` 变量链与类型保持复用 extract/CaseContext，未知字段即报错，清理进报告汇总——正向链路用例不再必须写 Python |
 | `db.py` | PyMySQL 驱动直连、真参数绑定（`%s` 占位符）、线程本地连接复用、结构化 `records` 行、驱动缺失自动 SKIP、`strict` 模式（CI 数据库不可用直接失败） |
 | `cleanup.py` | 清理动作注册化、顺序执行、成功/跳过/失败汇总注入报告 |
@@ -359,3 +392,23 @@ shopping 的 `test_update_product_name` 是完整示范，`helpers.py:create_pro
 - **内核单测**：`framework/tests` 扩到 **47 条**（新增场景编排 16 条：加载/重名校验/
   未知字段/提取渲染/缺省断言/负向断言/schema 断言/失败即止/清理注册/幂等清理/变量缺失 SKIP）。
 - 回归：`-n 4` **140 passed（7.54s）**；脚手架生成项目 collect-only 验证通过（9 条收集正常）。
+
+## 13. 启动体检（2026-11-24）
+
+- **新增 `framework/preflight.py`**：`Check` / `Preflight` 把环境检查做成有序清单，收集用例前
+  跑一次；必检项失败抛 `pytest.UsageError`——终端一条 `ERROR: ...`、退出码 4、用例零执行。
+  四种结果 `OK` / `WARN`（`required=False` 项失败）/ `SKIP`（前置未满足，如后端不可达时不再
+  逐个账号登录）/ `FAIL`（必检失败）。
+- **shopping 接入**：`conftest.py` 的 `pytest_sessionstart` 跑四项检查（后端可达 / 服务自检 /
+  数据库可用 / 登录可用）；探活复用一次请求并关闭重试（后端没起时等待从 4.3s 降到 2.1s）；
+  登录失败消息改用新增的 `ApiResult.describe()`（`HTTP 200 / code 401 / 用户名或密码不正确`），
+  不再把整段 `repr` 塞进体检消息。体检登录结果被 `tokens` fixture 复用，不重复登录。
+- **分级口径**：数据库检查用 `required=DB_STRICT`——本地（`DB_STRICT=0`）只告警，保持「本地
+  无库也能跑、落库断言自动跳过」的既有约定；CI（`DB_STRICT=1`）直接失败，杜绝假全绿。
+- **沉淀**：`run_summary.json` 新增 `preflight` 字段（每项 state/detail/耗时）。
+- **验证**：后端未启动 → `EXIT=4`、一条消息、0 用例执行；口令写错 → 只报「登录可用」并指出
+  401 原因；后端关闭时 `--collect-only` 仍正常收集 140 条；正常环境串行 **140 passed**、
+  `-n 4` **140 passed**；`API_PREFLIGHT_ENABLED=0` 回退到改造前行为（仍 140 passed）；
+  `API_PREFLIGHT_STRICT=0` 只告警不中止。
+- **内核单测**：`framework/tests` 扩到 **70 条**（新增 23 条：失败聚合、WARN/SKIP 分级、
+  strict/enabled 开关、消息单行化与截断、Ctrl+C 不被吞、records 副本、环境变量默认值）。
