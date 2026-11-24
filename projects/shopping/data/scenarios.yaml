@@ -1,0 +1,97 @@
+# shopping 场景编排：一个 YAML 块描述一条多步业务链路，断言与清理由内核执行。
+# 用例入口：testcases/test_15_scenarios.py（变量由 scenario_user_token / role_tokens 提供）。
+#
+# 与 shopping 已有 Python 用例的关系：链路相同（审批入库、购物车），这里示范
+# 「新场景只写 YAML」的接入方式；断言口径与 helpers.py 保持一致。
+scenarios:
+  # 管理员提交 → 审批员通过 → 前台可查（商品名唯一，xdist 并行安全）
+  - name: 商品审批入库链路
+    vars: {product_name: 'SCEN-${uid}'}
+    steps:
+      - step: 管理员提交商品申请
+        request:
+          method: POST
+          path: /api/admin/products
+          token: '${admin_token}'
+          body:
+            name: '${product_name}'
+            subtitle: 场景编排构造商品
+            description: 由 YAML 场景创建，用例结束自动清理
+            categoryId: '${category_id}'
+            price: 199
+            originalPrice: 299
+            flashPrice: 99
+            image: /images/product-01.jpg
+            stock: 30
+            sales: 0
+            tags: 场景测试
+            badge: SCEN
+            isHot: 0
+            isFlash: 0
+            status: 1
+        extract: {approval_id: data.id}
+        assert: {ok: true}
+      - step: 审批员通过申请，商品入库上架
+        request:
+          method: POST
+          path: '/api/admin/approvals/${approval_id}/approve'
+          token: '${reviewer_token}'
+          body: {remark: 场景编排审批通过}
+        extract: {product_id: data.id}
+        assert: {ok: true}
+      - step: 前台按唯一名称可查到已上架商品
+        request:
+          method: GET
+          path: /api/products
+          params: {keyword: '${product_name}'}
+        assert: {ok: true, data_schema: {type: array, minItems: 1}}
+    cleanup:
+      - method: DELETE
+        path: '/api/admin/approvals/${approval_id}'
+        token: '${admin_token}'
+        ignore_missing: true
+      - method: DELETE
+        path: '/api/admin/products/${product_id}'
+        token: '${admin_token}'
+        ignore_missing: true
+
+  # 购物车按 user_id 隔离：user_token 来自每条场景独立注册的用户（teardown 精确删除）
+  - name: 购物车加购与清空
+    steps:
+      - step: 初始购物车为空
+        request:
+          method: GET
+          path: /api/cart
+          token: '${user_token}'
+        assert: {ok: true, data_schema: {type: array, maxItems: 0}}
+      - step: 取第一件在售商品
+        request:
+          method: GET
+          path: /api/products
+        extract: {product_id: 'data[0].id'}
+        assert: {ok: true, data_schema: {type: array, minItems: 1}}
+      - step: 加入购物车
+        request:
+          method: POST
+          path: /api/cart/add
+          token: '${user_token}'
+          body: {productId: '${product_id}', quantity: 1}
+        assert: {ok: true}
+      - step: 购物车应有 1 件商品
+        request:
+          method: GET
+          path: /api/cart
+          token: '${user_token}'
+        assert: {ok: true, data_schema: {type: array, minItems: 1}}
+      - step: 清空购物车
+        request:
+          method: DELETE
+          path: /api/cart
+          token: '${user_token}'
+        assert: {ok: true}
+      - step: 购物车恢复为空
+        request:
+          method: GET
+          path: /api/cart
+          token: '${user_token}'
+        assert: {ok: true, data_schema: {type: array, maxItems: 0}}

@@ -1,0 +1,9 @@
+# 接口自动化测试依赖（版本已锁定，保证跨环境结果一致）
+# 本机验证：Python 3.12.7 / 2026-11-23
+pytest==9.1.1
+pytest-html==4.2.0
+pytest-xdist==3.8.0
+requests==2.34.2
+PyYAML==6.0.3
+jsonschema==4.23.0
+PyMySQL==1.2.4

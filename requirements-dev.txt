@@ -1,0 +1,2 @@
+# 静态检查与工程门禁（测试运行依赖见 requirements.txt）
+ruff==0.17.6

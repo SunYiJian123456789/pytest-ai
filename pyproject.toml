@@ -1,0 +1,9 @@
+# 工程门禁：静态检查（ruff）配置；测试配置见 pytest.ini
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = ["reports"]
+
+[tool.ruff.lint]
+# 口径与 ruff 默认一致（pyflakes + 常用 pycodestyle 错误），显式声明便于团队了解
+select = ["E4", "E7", "E9", "F"]

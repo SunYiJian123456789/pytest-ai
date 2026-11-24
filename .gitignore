@@ -1,0 +1,27 @@
+# 本地配置与敏感信息（.env.<API_ENV> 同样不入库；.env.example 模板除外）
+.env
+.env.*
+!.env.example
+*.log
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# 报告产物（每次运行生成，不入库；预览图保留）
+reports/*.html
+reports/failed_requests/
+reports/.cleanup_*.json
+reports/archive/
+reports/junit.xml
+reports/run_summary.json
+
+# 编辑器与工具本地状态
+.idea/
+.vscode/
+*.swp
+.ruff_cache/
+.workbuddy/

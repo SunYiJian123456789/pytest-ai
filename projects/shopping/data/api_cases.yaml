@@ -1,0 +1,250 @@
+# -*- encoding: utf-8 -*-
+# 接口自动化静态用例数据（pytest 参数化的数据源）。
+#
+# 这里只放「可预先写死的扁平/嵌套参数」：非法输入、边界值、路径清单。
+# token、随机商品名、审批流 ID 等动态数据仍由 helpers.py / conftest.py 运行时构造，
+# 不进入本文件。
+#
+# 加载器：read_yaml.cases(name, *fields) -> list[tuple]
+# 每个数据集是列表，每项为映射；字段名必须覆盖用例 parametrize 的参数名。
+
+register_short_credentials:
+  - username: ab
+    password: "123456"
+  - username: validname
+    password: "123"
+
+cart_requires_login:
+  - method: get
+    path: /api/cart
+    extra: {}
+  - method: post
+    path: /api/cart/add
+    extra:
+      json_body:
+        productId: 1
+  - method: put
+    path: /api/cart/1
+    extra:
+      json_body:
+        quantity: 2
+  - method: delete
+    path: /api/cart/1
+    extra: {}
+  - method: delete
+    path: /api/cart
+    extra: {}
+
+payment_invalid_amounts:
+  - amount: 0
+  - amount: -1
+  - amount: abc
+
+admin_endpoints_require_login:
+  - path: /api/admin/stats
+  - path: /api/admin/products
+  - path: /api/admin/categories
+  - path: /api/admin/approvals
+  - path: /api/admin/approvals/pending-count
+
+create_product_invalid_patches:
+  - patch:
+      name: ""
+    message: 商品名称不能为空
+  - patch:
+      categoryId: 999999999
+    message: 有效的商品分类
+  - patch:
+      price: -1
+    message: 售价不能为负数
+  - patch:
+      image: ""
+    message: 请上传商品图片
+
+# 上架 / 下架：合法状态值与预期的前台可见性。
+# visible 用于断言：下架后商城查不到，上架后商城可查到。
+product_status_values:
+  - status: 0
+    visible: false
+    label: 下架
+  - status: 1
+    visible: true
+    label: 上架
+
+# 上架 / 下架：非法状态值。后端 intValue() 对无法解析的值回退为 -1，
+# 统一返回「状态值只能是 0（下架）或 1（上架）」，故 message 断言取「状态值」。
+invalid_product_status_values:
+  - status: 2
+    message: 状态值
+  - status: -1
+    message: 状态值
+  - status: abc
+    message: 状态值
+
+# 批量上下架：状态值与预期前台可见性（复用同一套语义，单独成集便于扩展）。
+batch_status_values:
+  - status: 0
+    visible: false
+  - status: 1
+    visible: true
+
+# 新增商品申请：合法表单模板。运行时由用例覆盖 name（唯一值）、
+# categoryId（动态校验）与 image（真实存在的图片），其余字段直接来自这里，
+# 并在审批入库后逐字段比对。
+product_form_templates:
+  - template:
+      subtitle: 测试
+      description: 测试订单
+      price: 1000
+      originalPrice: 999
+      flashPrice: 699
+      stock: 100
+      tags: 承担
+      badge: 直降100
+      isHot: 1
+      isFlash: 1
+      status: 1
+
+# ===== 登录后权限矩阵（framework.permissions 数据驱动）=====
+# role 取自 conftest 的 role_tokens fixture；anonymous 表示不带 token。
+# 覆盖：未登录拦截、用户 token 访问管理端被拒、管理 token 访问用户端被拒、
+# 管理端内部只读放行、跨角色审批权限等。
+permission_matrix:
+  - label: 匿名访问购物车被拒
+    role: anonymous
+    method: GET
+    path: /api/cart
+    expect_code: 401
+    message_has: 请先登录
+  - label: 匿名访问支付记录被拒
+    role: anonymous
+    method: GET
+    path: /api/pay/records
+    expect_code: 401
+  - label: 匿名访问管理端商品被拒
+    role: anonymous
+    method: GET
+    path: /api/admin/products
+    expect_http: 401
+    expect_code: 401
+    message_has: 管理端未登录
+  - label: 匿名访问管理端统计被拒
+    role: anonymous
+    method: GET
+    path: /api/admin/stats
+    expect_http: 401
+    expect_code: 401
+  - label: 匿名访问分类接口放行
+    role: anonymous
+    method: GET
+    path: /api/categories
+    expect_http: 200
+    expect_code: 200
+  - label: 用户 token 访问购物车放行
+    role: user
+    method: GET
+    path: /api/cart
+    expect_code: 200
+  - label: 用户 token 访问支付记录放行
+    role: user
+    method: GET
+    path: /api/pay/records
+    expect_code: 200
+  - label: 用户 token 访问管理端商品被拒
+    role: user
+    method: GET
+    path: /api/admin/products
+    expect_http: 401
+    expect_code: 401
+  - label: 用户 token 访问管理端统计被拒
+    role: user
+    method: GET
+    path: /api/admin/stats
+    expect_http: 401
+    expect_code: 401
+  - label: 管理 token 访问购物车被拒
+    role: admin
+    method: GET
+    path: /api/cart
+    expect_code: 401
+    message_has: 请先登录
+  - label: 管理 token 访问支付记录被拒
+    role: admin
+    method: GET
+    path: /api/pay/records
+    expect_code: 401
+  - label: 管理 token 访问管理端商品放行
+    role: admin
+    method: GET
+    path: /api/admin/products
+    expect_http: 200
+    expect_code: 200
+  - label: 审核 token 访问管理端统计放行
+    role: reviewer
+    method: GET
+    path: /api/admin/stats
+    expect_http: 200
+    expect_code: 200
+  - label: 审核 token 访问管理端审批列表放行
+    role: reviewer
+    method: GET
+    path: /api/admin/approvals
+    expect_http: 200
+    expect_code: 200
+
+# ===== 响应契约（framework.schema 数据驱动）=====
+# 用 JSON Schema Draft 7 描述响应结构；用例只选场景，结构改 YAML 即可。
+response_schemas:
+  health:
+    type: object
+    required: [code, message, data]
+    properties:
+      code: {type: integer, const: 200}
+      message: {type: string}
+      data:
+        type: object
+        required: [status, database]
+        properties:
+          status: {type: string, const: UP}
+          database: {type: string, minLength: 1}
+  categories:
+    type: object
+    required: [code, data]
+    properties:
+      code: {type: integer, const: 200}
+      data:
+        type: array
+        minItems: 1
+        items:
+          type: object
+          required: [id, name, sortOrder]
+          properties:
+            id: {type: integer, minimum: 1}
+            name: {type: string, minLength: 1}
+            sortOrder: {type: integer, minimum: 0}
+  user_me:
+    type: object
+    required: [code, data]
+    properties:
+      code: {type: integer, const: 200}
+      data:
+        type: object
+        required: [id, username, nickname]
+        properties:
+          id: {type: integer, minimum: 1}
+          username: {type: string, minLength: 1}
+          nickname: {type: string}
+  admin_stats:
+    type: object
+    required: [code, data]
+    properties:
+      code: {type: integer, const: 200}
+      data:
+        type: object
+        required: [total, onSale, offSale, totalStock, categoryCount]
+        properties:
+          total: {type: integer, minimum: 0}
+          onSale: {type: integer, minimum: 0}
+          offSale: {type: integer, minimum: 0}
+          totalStock: {type: integer, minimum: 0}
+          categoryCount: {type: integer, minimum: 0}
