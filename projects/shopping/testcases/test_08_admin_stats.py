@@ -32,9 +32,22 @@ def test_stats_money_fields_are_numbers(api, admin_token):
 
 @pytest.mark.admin
 def test_stats_pending_count_matches_approval_api(api, admin_token):
-    stats = api.get('/api/admin/stats', token=admin_token).data
-    pending = api.get('/api/admin/approvals/pending-count', token=admin_token).data
-    assert stats['pendingApprovals'] == pending['pending'], (stats['pendingApprovals'], pending)
+    """两个待审口径应指向同一个数。
+
+    并行执行（-n 4）时审批流用例会在其他 worker 上同时创建待审申请，
+    两次独立请求之间插入一行就会读到 2 vs 3 —— 这是「取景不同」，不是口径不一致。
+    因此最多重试 3 次：任一次读到一致即通过，连续 3 次都不一致才判失败
+    （那才是真的有两条统计口径）。
+    """
+    mismatch = None
+    for _ in range(3):
+        stats = api.get('/api/admin/stats', token=admin_token).data
+        pending = api.get('/api/admin/approvals/pending-count', token=admin_token).data
+        if stats['pendingApprovals'] == pending['pending']:
+            return
+        mismatch = (stats['pendingApprovals'], pending['pending'])
+    raise AssertionError('待审口径连续 3 次不一致：stats.pendingApprovals=%s，'
+                         'pending-count.pending=%s' % mismatch)
 
 
 @pytest.mark.admin

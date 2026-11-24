@@ -2,6 +2,7 @@
 """服务健康与统一响应结构。"""
 import pytest
 
+from framework.assertions import assert_elapsed
 from projects.shopping.config import BASE_URL
 
 
@@ -11,6 +12,7 @@ def test_health_status_up(api):
     assert result.status == 200, result
     assert result.ok, result
     assert result.data.get('status') == 'UP', result.data
+    assert_elapsed(result, 500, '健康检查')
 
 
 @pytest.mark.smoke

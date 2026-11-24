@@ -6,6 +6,7 @@
 """
 import pytest
 
+from framework.assertions import assert_elapsed
 from projects.shopping.helpers import assert_order_persisted, register_isolated_user
 from projects.shopping.data import cases
 
@@ -82,6 +83,7 @@ def test_payment_succeeds_below_limit(api, isolated_token, filled_cart, cleaner)
     cleaner.order(result.data.get('orderNo') if result.data else None)
     assert result.ok and result.data['status'] == 'SUCCESS', result
     assert result.data['amount'] == 999.99, result.data
+    assert_elapsed(result, 1200, '虚拟支付')
     assert_order_persisted(result.data['orderNo'], status='SUCCESS', amount=999.99)
 
 

@@ -2,6 +2,7 @@
 """商城用户端：注册、登录、登录态、token 边界。"""
 import pytest
 
+from framework.assertions import assert_elapsed
 from projects.shopping.helpers import uid
 from projects.shopping.config import STORE_PASSWORD, STORE_USERNAME
 from projects.shopping.data import cases
@@ -69,6 +70,7 @@ def test_login_with_demo_account(api):
     assert len(result.data['token']) == 32, result.data
     assert result.data['user']['username'] == STORE_USERNAME, result.data
     assert not result.data['user'].get('passwordHash'), result.data['user']
+    assert_elapsed(result, 800, '用户登录')
 
 
 @pytest.mark.auth

@@ -2,6 +2,8 @@
 """首页聚合、分类、轮播、促销与商品列表。"""
 import pytest
 
+from framework.assertions import assert_elapsed
+
 
 @pytest.mark.smoke
 @pytest.mark.product
@@ -38,6 +40,7 @@ def test_products_list_only_contains_on_sale(api):
     result = api.get('/api/products')
     assert result.ok and result.data, result
     assert all(row.get('status') == 1 for row in result.data), result.data[:3]
+    assert_elapsed(result, 800, '商品列表')
 
 
 @pytest.mark.product

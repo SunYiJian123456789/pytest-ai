@@ -2,6 +2,8 @@
 """搜索联想与关键词处理边界。"""
 import pytest
 
+from framework.assertions import assert_elapsed
+
 
 @pytest.mark.product
 def test_suggest_empty_keyword_returns_empty(api):
@@ -15,6 +17,7 @@ def test_suggest_honours_limit(api):
     assert result.ok, result
     assert len(result.data) <= 3, result.data
     assert all(row['status'] == 1 for row in result.data), result.data
+    assert_elapsed(result, 800, '搜索联想')
 
 
 @pytest.mark.product

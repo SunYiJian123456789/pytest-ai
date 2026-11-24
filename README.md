@@ -214,7 +214,7 @@ fixture 直接复用，不重复登录；结果写入 `run_summary.json` 的 `pr
 | --- | --- |
 | `config.py` | 环境变量 > `.env` > 默认值；`Settings(prefix)` 支持多项目共存 |
 | `client.py` | 统一请求/计时/响应解析、慢请求高亮、敏感字段脱敏（password/token 等键值掩码，报告与断言消息全覆盖）、失败请求存档、幂等方法重试、trace_id 链路追踪 |
-| `assertions.py` | `assert_ok/assert_status/assert_code/assert_message_contains/assert_fields/assert_numeric_fields/assert_contains_row` 等，失败信息带 URL 与 code |
+| `assertions.py` | `assert_ok/assert_status/assert_code/assert_message_contains/assert_fields/assert_numeric_fields/assert_contains_row` 等，失败信息带 URL 与 code；`assert_elapsed` 做响应耗时预算校验（`API_SLA_SCALE` 整体放宽，不改用例） |
 | `data.py` | YAML 数据集校验、单字段返回标量列表、多字段返回 tuple，直接喂给 `parametrize` |
 | `extract.py` | 响应值提取与用例内依赖链：`extract` 点分路径 + 数组下标，`CaseContext` 记录变量并渲染 `${name}` 占位符 |
 | `schema.py` | 响应契约校验（JSON Schema Draft 7）：校验字段存在性/类型/范围，失败定位到具体路径并附完整响应 |
@@ -455,3 +455,24 @@ shopping 的 `test_update_product_name` 是完整示范，`helpers.py:create_pro
   断言分别报出「数量被越权改动」「购物车项被越权删除」，确认不是永远绿的假用例。
 - 回归：串行 **149 passed（9.08s）**、`-n 4` **149 passed（6.17s）**、`ruff check .` 通过；
   内核单测 70 → **90 条**（新增权限矩阵 20 条：行解析、凭证解析、变量渲染、断言消息）。
+
+## 15. 断言质量：耗时预算与已知缺陷登记（2026-11-24）
+
+- **新增 `assert_elapsed(result, max_ms, hint)`**：断言单次请求耗时不超过预算，
+  预算 = `max_ms × API_SLA_SCALE`（默认 1.0）。已接入 6 条核心链路——健康检查 500ms、
+  用户登录 800ms、商品列表 800ms、搜索联想 800ms、加入购物车 800ms、虚拟支付 1200ms。
+  阈值按本机实测中位数（2~6ms）留了两个数量级余量，只抓「功能没坏但慢到不可用」，
+  不压着真实值卡秒表；慢机器/CI 用 `API_SLA_SCALE=3` 整体放宽。
+- **修掉一处假绿**：`test_upload_requires_file` 原断言 `status in (400, 500)`，
+  等于把服务端未处理异常记成「防护住了」。实测后端对非 multipart 请求返回 **500**
+  （Spring `MultipartException` 无人处理，回落到默认错误页且没有 code/message 包装）。
+- **同时引入已知缺陷登记机制**：该用例改为 `xfail(strict=True)` 并写明原因，预期 400/415。
+  缺陷修好后它会变成 XPASS 被 strict 判失败，提示删除标记——不会再被永久静默。
+  `run_summary.json` 已能分别统计 `xfailed` / `xpassed`。
+- **补一条漏测分支**：`test_upload_rejects_empty_file` —— file part 存在但内容为空时
+  返回 `code 400 / 文件为空`（这条分支原来没有用例）。
+- **断言有效性验证**：`API_SLA_SCALE=0.0001` 反向验证，6 条耗时断言全部按预期报
+  「耗时 X ms 超出预算 0 ms」并带一行 `describe()` 摘要，确认不是恒真断言。
+- 回归：**149 passed + 1 xfailed（7.67s）**、`ruff check .` 通过；
+  内核单测 90 → **102 条**（新增断言预算 12 条：默认值、放宽倍数、非法配置兜底、
+  边界值、超预算消息）。

@@ -2,6 +2,7 @@
 """购物车：鉴权、增删改查与数量合并。"""
 import pytest
 
+from framework.assertions import assert_elapsed
 from projects.shopping.helpers import register_isolated_user
 from projects.shopping.data import cases
 
@@ -36,6 +37,7 @@ def test_add_product_to_cart(api, isolated_token, first_product):
     assert len(result.data) == 1, result.data
     assert result.data[0]['productId'] == first_product['id'], result.data
     assert result.data[0]['quantity'] == 1, result.data
+    assert_elapsed(result, 800, '加入购物车')
 
 
 @pytest.mark.cart

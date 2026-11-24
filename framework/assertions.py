@@ -6,9 +6,43 @@
 """
 from typing import Any, Iterable
 
+from framework.config import env
+
 
 def _detail(result, hint: str) -> str:
     return ('%s → %r' % (hint, result)) if hint else repr(result)
+
+
+def sla_scale() -> float:
+    """耗时预算的整体放宽倍数，来自 API_SLA_SCALE，非法值回落到 1.0。
+
+    慢机器、CI、容器环境下用它整体放大预算，避免把性能断言写成 flaky 源；
+    正常环境保持 1.0，改的是环境而不是用例。
+    """
+    raw = env('API_SLA_SCALE', '').strip()
+    if not raw:
+        return 1.0
+    try:
+        scale = float(raw)
+    except ValueError:
+        return 1.0
+    return scale if scale > 0 else 1.0
+
+
+def assert_elapsed(result, max_ms: float, hint: str = ''):
+    """断言单次请求耗时不超过预算（毫秒），预算 = max_ms × API_SLA_SCALE。
+
+    只用在高价值链路（健康检查、登录、列表、加购、支付），阈值按本机实测
+    中位数留出两个数量级余量，目的是抓「功能没坏但慢到不可用」的劣化，
+    不是压着真实值卡秒表。
+    """
+    scale = sla_scale()
+    budget = max_ms * scale
+    assert result.elapsed_ms <= budget, (
+        '%s：耗时 %d ms 超出预算 %.0f ms（基准 %.0f ms × API_SLA_SCALE %.2f）→ %s'
+        % (hint or '响应耗时', result.elapsed_ms, budget, max_ms, scale, result.describe())
+    )
+    return result
 
 
 def assert_ok(result, hint: str = ''):
