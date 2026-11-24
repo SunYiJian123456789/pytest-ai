@@ -48,9 +48,11 @@ def pytest_configure(config):
             Path(tempfile.gettempdir()) / 'api-automation-collect-only-report.html'
         )
     config._cleanup_dump = None
+    config._coverage_dump = None
     if getattr(config, 'workerinput', None):
         worker_id = config.workerinput.get('workerid', 'worker')
         config._cleanup_dump = ROOT / 'reports' / ('.cleanup_%s.json' % worker_id)
+        config._coverage_dump = ROOT / 'reports' / ('.api_coverage_%s.json' % worker_id)
     else:
         config._session_started = time.monotonic()  # 结果沉淀用：本轮起始时间
 
@@ -103,17 +105,43 @@ def _archive_report(target: Path):
         old.unlink(missing_ok=True)
 
 
+def _write_coverage(config):
+    """主进程：合并各 worker 的命中，与接口清单比对后落盘并在终端打表。"""
+    from framework import coverage
+    try:
+        report = coverage.collect_main(ROOT / 'reports')
+    except Exception as exc:  # noqa: BLE001 - 覆盖率统计失败不应影响测试结论
+        print('[coverage] 覆盖率统计失败：%s' % exc)
+        return
+    if not report:
+        return
+    reporter = config.pluginmanager.get_plugin('terminalreporter')
+    lines = coverage.render_terminal(report).splitlines()
+    if reporter is not None:
+        reporter.write_line('')
+        for line in lines:
+            reporter.write_line(line)
+    else:
+        print('\n'.join(lines))
+
+
 def pytest_unconfigure(config):
-    """worker 只落盘清理日志；主进程合并后增强报告、注入汇总横幅并归档。"""
+    """worker 只落盘清理/覆盖率日志；主进程合并后增强报告、注入汇总横幅并归档。"""
     if getattr(config, 'workerinput', None):
         dump = getattr(config, '_cleanup_dump', None)
         if dump:
             dump.parent.mkdir(parents=True, exist_ok=True)
             dump_log(dump)
+        coverage_dump = getattr(config, '_coverage_dump', None)
+        if coverage_dump:
+            from framework import coverage
+            coverage_dump.parent.mkdir(parents=True, exist_ok=True)
+            coverage.dump(coverage_dump)
         return
     load_logs(ROOT / 'reports')
     if config.getoption('collectonly', default=False):
         return
+    _write_coverage(config)
     html_path = getattr(config.option, 'htmlpath', None)
     if not html_path:
         return

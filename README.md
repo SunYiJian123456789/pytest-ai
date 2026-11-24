@@ -17,6 +17,7 @@ D:/shopping-api-automation/
 │   ├── data.py                      YAML 数据加载与 parametrize 转换
 │   ├── db.py                        SQL 执行器（结构化结果、密码不进命令行）
 │   ├── cleanup.py                   注册式清理器 + 清理汇总横幅
+│   ├── coverage.py                  接口覆盖率：运行期请求比对 YAML 清单
 │   ├── hooks.py                     通用 pytest 钩子 + 报告选项注入
 │   ├── reporting/                   仪表盘报告增强（enhancer.py / assets.py）
 │   ├── scaffold.py                  新项目脚手架：python -m framework.scaffold
@@ -27,9 +28,10 @@ D:/shopping-api-automation/
 │   │   ├── conftest.py              api / tokens / cleaner fixtures
 │   │   ├── helpers.py               商品构造、独立用户、落库断言
 │   │   ├── dbclean.py               shopping 业务 SQL
-│   │   ├── data.py + data/          YAML 入口与 12 组数据集（含权限矩阵、越权矩阵、响应契约）
-│   │   ├── testcases/               14 个测试模块
-│   │   └── docs/接口清单.md          接口与用例对照
+│   │   ├── data.py + data/          YAML 入口、12 组数据集（权限矩阵/越权矩阵/响应契约）
+│   │   │                            与 api_inventory.yaml（接口覆盖率基准）
+│   │   ├── testcases/               20 个测试模块
+│   │   └── docs/接口清单.md          接口说明与已知行为（覆盖率以 YAML 清单为准）
 │   └── <新项目>/                    由脚手架生成，按配置接入
 ├── conftest.py                      根 conftest：仅挂载 framework 通用钩子
 ├── pytest.ini                       默认 testpaths = projects/shopping/testcases
@@ -222,6 +224,7 @@ fixture 直接复用，不重复登录；结果写入 `run_summary.json` 的 `pr
 | `scenario.py` | YAML 场景编排：一个 YAML 块描述多步业务链路（request/extract/assert/cleanup），`${}` 变量链与类型保持复用 extract/CaseContext，未知字段即报错，清理进报告汇总——正向链路用例不再必须写 Python |
 | `db.py` | PyMySQL 驱动直连、真参数绑定（`%s` 占位符）、线程本地连接复用、结构化 `records` 行、驱动缺失自动 SKIP、`strict` 模式（CI 数据库不可用直接失败） |
 | `cleanup.py` | 清理动作注册化、顺序执行、成功/跳过/失败汇总注入报告 |
+| `coverage.py` | 接口覆盖率：`ApiClient` 上报真实请求 → 路径归一化（`{id}`/`{file}`）→ 与 YAML 清单比对 → 输出 `api_coverage.md/json`；`python -m framework.coverage --min N` 供 CI 门禁 |
 | `reporting/` | pytest-html 之上的仪表盘：KPI、模块分布、TOP 接口、HTTP/业务双层状态、请求明细 |
 | `hooks.py` | collect-only 不覆盖正式报告、报告标题、报告增强与降级提示 |
 | `scaffold.py` | 一键生成新项目骨架，占位符自动替换 |
@@ -264,7 +267,7 @@ def test_chain(api, tokens, cleaner, ctx):
 
 shopping 的 `test_update_product_name` 是完整示范，`helpers.py:create_product`
 是固定链路的封装示范（提取 ID 后立即登记 cleaner，中途失败也不留脏数据）。
-内核单测：`python -m pytest framework/tests -o addopts= -q`（111 条）。
+内核单测：`python -m pytest framework/tests -o addopts= -q`（140 条）。
 
 ## 5. shopping 项目现状
 
@@ -579,3 +582,58 @@ shopping 的 `test_update_product_name` 是完整示范，`helpers.py:create_pro
 这条纪律和之前「审批流改精确查询」是同一个思路：**断言的可重复性优先于用例的简洁性**。
 
 - 回归：串行 **173 passed + 5 xfailed（10.20s）**、`-n 4` 连续 3 轮同结果、`ruff check .` 通过。
+
+## 18. 接口覆盖率：从人工对照变成可计算（2026-11-24）
+
+之前「覆盖了多少接口」只能靠人读 `docs/接口清单.md`。现在改成运行期统计：
+
+1. `ApiClient` 每发一次请求就上报（方法 + URL + 状态码）；
+2. 路径归一化后与 YAML 清单比对：`/api/cart/12` → `/api/cart/{id}`、
+   `/images/upload-abc.png` → `/images/{file}`、`/api/admin/products/1509/status`
+   → `/api/admin/products/{id}/status`；
+3. 输出 `reports/api_coverage.md`（人看）+ `api_coverage.json`（看板/门禁），终端同时打表。
+
+### 清单
+
+`projects/shopping/data/api_inventory.yaml` —— 43 条「方法 + 路径」，带 `group` / `name` /
+`covered_by`。清单只声明**存在哪些接口**；覆盖率不按 `covered_by` 推断，而是按真实请求算。
+`接口清单.md` 保留说明与实测行为，两边的职责分开：**人读说明，机器算覆盖**。
+
+### 实测结果
+
+| 跑法 | 覆盖率 |
+| --- | --- |
+| 全量（串行 / `-n 4`） | **43/43 = 100.0%** |
+| 只跑 `test_01_health.py` | **5/43 = 11.6%** |
+
+两次都是真的按请求统计（不是常量），这也是对统计逻辑本身的验证。
+
+终端输出：
+
+```text
+[coverage] 接口覆盖率 43/43 = 100.0%
+  清单外请求 1 条：
+    - GET /api/__definitely_not_exists__（404×1）
+```
+
+「清单外请求」是有意保留的一项：`test_undefined_endpoint_returns_404` 会故意打一个不存在的
+路径，被单独列出来而不是混进覆盖率——**清单外 ≠ 覆盖率低**，但能发现「新接口写了用例却忘了
+登记清单」这种情况。
+
+### xdist 合并
+
+沿用 cleanup 的机制：worker 退出时把本进程命中写 `.api_coverage_<worker>.json`，
+主进程在 `pytest_unconfigure` 合并后删除临时文件。已实测 `-n 4` 下覆盖率仍为 43/43。
+
+### CI
+
+- 表格写进 GitHub Actions 运行页摘要（`$GITHUB_STEP_SUMMARY`），不用点进 artifact 才看得到；
+- `reports/api_coverage.md` / `.json` 进 artifact；
+- 门禁是**可选**的：设仓库变量 `API_COVERAGE_MIN=90` 才会执行
+  `python -m framework.coverage --min 90`，低于阈值返回非 0 让流水线失败。
+  阈值策略留在流水线里，框架不去改 pytest 的退出码。
+
+### 内核单测
+
+111 → **140 条**（新增覆盖率 29 条：归一化 7 组、清单校验、汇总统计、
+清单外请求、markdown/terminal 渲染、worker 合并、CLI 退出码）。

@@ -18,6 +18,9 @@ reports/.cleanup_*.json
 reports/archive/
 reports/junit.xml
 reports/run_summary.json
+reports/api_coverage.md
+reports/api_coverage.json
+reports/.api_coverage_*.json
 
 # 编辑器与工具本地状态
 .idea/

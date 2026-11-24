@@ -310,6 +310,11 @@ class ApiClient:
             )
         if not result.ok:
             self._archive_failure(method, url, result)
+        # 接口覆盖率：上报真实发出的请求（方法 + 归一化路径 + 状态码）。
+        # 惰性导入：framework/__init__ 会导入本模块，若这里顶层导入 coverage，
+        # `python -m framework.coverage` 启动时会命中「module already in sys.modules」告警。
+        from framework import coverage as _coverage
+        _coverage.record(method, result.url or url, result.status)
         self._attach(method, path, req_headers, json_body, params, result)
         return result
 

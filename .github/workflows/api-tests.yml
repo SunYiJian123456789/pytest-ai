@@ -74,6 +74,25 @@ jobs:
         shell: bash
         run: python -m pytest -n 4
 
+      # 覆盖率由运行期真实请求统计，比对 data/api_inventory.yaml。
+      # 表格同时写进 Actions 运行页摘要；设仓库变量 API_COVERAGE_MIN 才启用门禁。
+      - name: API coverage (inventory vs actual requests)
+        if: always()
+        shell: bash
+        env:
+          API_COVERAGE_MIN: ${{ vars.API_COVERAGE_MIN }}
+        run: |
+          if [ ! -f reports/api_coverage.md ]; then
+            echo "未生成覆盖率报告（用例未运行，或项目未配置接口清单）"
+            exit 0
+          fi
+          cat reports/api_coverage.md >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$API_COVERAGE_MIN" ]; then
+            python -m framework.coverage --format terminal --min "$API_COVERAGE_MIN"
+          else
+            python -m framework.coverage --format terminal
+          fi
+
       - name: Upload report
         if: always()
         uses: actions/upload-artifact@v4
@@ -83,5 +102,7 @@ jobs:
             reports/report.html
             reports/junit.xml
             reports/run_summary.json
+            reports/api_coverage.md
+            reports/api_coverage.json
             reports/failed_requests/
           if-no-files-found: ignore

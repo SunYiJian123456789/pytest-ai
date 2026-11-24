@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from framework import hooks
+from framework import coverage, hooks
 from framework.cleanup import CleanupRegistry, remove_uploaded_files
 from framework.client import ApiClient
 from framework.extract import CaseContext, extract
@@ -24,7 +24,7 @@ from projects.shopping.config import (
 
 
 def pytest_configure(config):
-    """把 shopping 项目信息注入通用报告钩子。"""
+    """把 shopping 项目信息注入通用报告钩子，并登记接口清单（覆盖率基准）。"""
     hooks.configure_report(
         title='Shopping 接口自动化测试报告（pytest + requests）',
         project_label=PROJECT_LABEL,
@@ -35,6 +35,7 @@ def pytest_configure(config):
         notes=[REPORT_NOTES],
         success_code=200,
     )
+    coverage.configure(Path(__file__).parent / 'data' / 'api_inventory.yaml')
 
 
 # ---------- 启动体检 ----------

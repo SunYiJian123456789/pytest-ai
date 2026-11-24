@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """{{PROJECT}} 的 fixtures：登录态、客户端、注册式清理器。"""
+from pathlib import Path
+
 import pytest
 
-from framework import hooks
+from framework import coverage, hooks
 from framework.cleanup import CleanupRegistry
 from framework.client import ApiClient, Envelope
 from framework.extract import CaseContext
@@ -23,6 +25,8 @@ def pytest_configure(config):
         notes=REPORT_NOTES,
         success_code=SUCCESS_CODE,
     )
+    # 接口覆盖率基准：data/api_inventory.yaml 登记被测接口（method + path）
+    coverage.configure(Path(__file__).parent / 'data' / 'api_inventory.yaml')
 
 
 def _client() -> ApiClient:
