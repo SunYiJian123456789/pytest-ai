@@ -30,6 +30,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # .env 不进版本库，CI 从 .env.example 生成一份默认配置；
+      # 这样顺带验证「样例文件是否完备」——样例缺键会在这里直接暴露。
+      - name: Prepare .env from example
+        shell: bash
+        run: |
+          if [ -f .env ]; then
+            echo "已存在 .env，跳过生成"
+          else
+            cp .env.example .env
+            echo "已从 .env.example 生成 .env（$(grep -c '^[A-Za-z_]' .env) 个键）"
+          fi
+
       - name: Verify prerequisites
         shell: bash
         run: |
