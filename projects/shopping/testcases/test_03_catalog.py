@@ -7,14 +7,21 @@ from framework.assertions import assert_elapsed
 
 @pytest.mark.smoke
 @pytest.mark.product
-def test_home_aggregates_all_sections(api):
+def test_home_aggregates_all_sections(api, soft):
     result = api.get('/api/home')
-    assert result.ok, result
-    for key in ('banners', 'categories', 'hotProducts', 'flashProducts', 'promotions'):
-        assert key in result.data, (key, result.data.keys())
-        assert isinstance(result.data[key], list), key
-    assert result.data['banners'], '轮播图不应为空'
-    assert result.data['categories'], '分类不应为空'
+    assert result.ok, result.describe()  # 前提：首页都取不到就不必逐段核
+
+    sections = ('banners', 'categories', 'hotProducts', 'flashProducts', 'promotions')
+    for key in sections:
+        present = soft.fields_present(result.data, key, label='首页聚合')
+        if present:
+            soft.check(isinstance(result.data[key], list),
+                       '首页聚合 %s 应为列表，实际 %s' % (key, type(result.data[key]).__name__))
+    if soft.fields_present(result.data, 'banners'):
+        soft.check(bool(result.data['banners']), '轮播图不应为空')
+    if soft.fields_present(result.data, 'categories'):
+        soft.check(bool(result.data['categories']), '分类不应为空')
+    soft.assert_all()
 
 
 @pytest.mark.product

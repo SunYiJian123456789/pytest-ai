@@ -3,7 +3,7 @@
 本工程已改造为 **通用内核 + 业务项目** 两层结构：
 
 - `framework/`：与被测系统无关的测试内核（请求、断言、数据驱动、清理、报告、脚手架）。
-- `projects/shopping/`：现成的 shopping 电商系统用例，149 条全绿，作为接入范例。
+- `projects/shopping/`：现成的 shopping 电商系统用例，162 条（159 通过 + 3 已知缺陷 xfail），作为接入范例。
 - 换一个系统时只新增 `projects/<项目名>/`，改配置和用例，**framework 代码不动**。
 
 ## 1. 目录结构
@@ -22,7 +22,7 @@ D:/shopping-api-automation/
 │   ├── scaffold.py                  新项目脚手架：python -m framework.scaffold
 │   └── project_template/            脚手架模板
 ├── projects/
-│   ├── shopping/                    shopping 业务层（149 条用例）
+│   ├── shopping/                    shopping 业务层（162 条用例）
 │   │   ├── config.py                账号、库表、路径、报告标签
 │   │   ├── conftest.py              api / tokens / cleaner fixtures
 │   │   ├── helpers.py               商品构造、独立用户、落库断言
@@ -150,7 +150,7 @@ shopping 用户端只有购物车项带客户端可控 id（后端 SQL 层写死
 | `<前缀>AUTH_COOKIE_NAME` | 空 | Cookie 模式下关心的 cookie 名 |
 
 `auto` 模式登录后自动探测：能提取到 token 就走 header，否则有 Cookie 就走 cookie。
-显式传 `token=` 的调用始终优先注入请求头，因此 shopping 现有 149 条业务用例无需改动。
+显式传 `token=` 的调用始终优先注入请求头，因此 shopping 现有 162 条业务用例无需改动。
 
 ### 重试与链路追踪
 
@@ -264,11 +264,11 @@ def test_chain(api, tokens, cleaner, ctx):
 
 shopping 的 `test_update_product_name` 是完整示范，`helpers.py:create_product`
 是固定链路的封装示范（提取 ID 后立即登记 cleaner，中途失败也不留脏数据）。
-内核单测：`python -m pytest framework/tests -o addopts= -q`（90 条）。
+内核单测：`python -m pytest framework/tests -o addopts= -q`（111 条）。
 
 ## 5. shopping 项目现状
 
-### 覆盖范围（149 条，全部通过）
+### 覆盖范围（162 条：159 通过 + 3 条已知缺陷 xfail）
 
 | 模块 | 用例数 | 模块 | 用例数 |
 | --- | --- | --- | --- |
@@ -277,9 +277,10 @@ shopping 的 `test_update_product_name` 是完整示范，`helpers.py:create_pro
 | 商品浏览 | 10 | 商品管理 | 22 |
 | 搜索联想 | 6 | 分类管理 | 8 |
 | 购物车 | 12 | 审批流 | 10 |
-| 虚拟支付 | 11 | 图片上传 | 3 |
+| 虚拟支付 | 11 | 图片上传 | 7 |
 | 登录后权限矩阵 | 15 | 响应契约校验 | 5 |
 | 场景编排 | 2 | 越权访问（IDOR） | 9 |
+| 幂等与并发 | 3 | 鉴权异常输入 | 6 |
 
 关键断言：`/api/health` 状态 UP、统一响应包装、上下架过滤、¥1000/¥1001 支付边界与订单落库、
 用户/管理 token 双向隔离、审批通过后才入库、有商品分类禁止删除、图片上传后可回源。
@@ -303,7 +304,7 @@ shopping 的 `test_update_product_name` 是完整示范，`helpers.py:create_pro
 
 `reports/report.html` 是单文件自包含报告，每次执行自动增强：
 
-- KPI 卡与通过率环形图、16 模块分布条形图、TOP 14 接口统计（均耗/峰值/失败数）。
+- KPI 卡与通过率环形图、18 模块分布条形图、TOP 14 接口统计（均耗/峰值/失败数）。
 - **双层状态分布**：HTTP 2xx/4xx/5xx 与业务 code 分开统计。shopping 后端把失败封装为
   `HTTP 200 + code 400/401/404`，所以两者口径不同；负向用例主动触发的 4xx/5xx 不代表测试失败。
 - 请求明细：方法徽章、HTTP 状态、业务 code、耗时、左右双栏请求/响应，token 脱敏。
@@ -476,3 +477,58 @@ shopping 的 `test_update_product_name` 是完整示范，`helpers.py:create_pro
 - 回归：**149 passed + 1 xfailed（7.67s）**、`ruff check .` 通过；
   内核单测 90 → **102 条**（新增断言预算 12 条：默认值、放宽倍数、非法配置兜底、
   边界值、超预算消息）。
+
+## 16. 幂等/并发、鉴权异常、上传安全面与软断言（2026-11-24）
+
+### 新增用例（12 条，总数 150 → 162）
+
+- **`test_17_idempotency.py`（3 条）**：同一购物车连续支付（第二次应被拒且只有一张订单）、
+  重复删除购物车项（HTTP 幂等，不报 5xx）、**同一购物车并发支付（3 线程）只应成一单**。
+- **`test_18_auth_negative.py`（6 条）**：篡改 / 乱码 / 超长 2000 字符 / 注入式 token 一律 401
+  且响应不带用户数据、缺 header 也 401，外加一条**有效 token 对照**（证明不是接口恒返回 401）。
+- **`test_12_upload.py` 3 → 7 条**：超 10MB 上限、扩展名与 MIME 不符、`../` 文件名穿越、
+  file part 内容为空。
+
+### 发现 3 个真实缺陷（均以 `xfail(strict=True)` 登记，修好后自动翻红提示删标记）
+
+| 缺陷 | 实测行为 | 应有行为 |
+| --- | --- | --- |
+| **并发重复下单**（最严重） | 3 线程同时支付同一购物车 → **3 张 SUCCESS 订单**（4 轮 × 3 线程 = 12 单，期望 4 单）。`PayController` 先 `findByUser` 再 `PayService.record`，无幂等键、无行锁 | 只成功一单，其余返回「购物车为空」 |
+| 上传超 10MB | `max-file-size=10MB` 超限抛 `MaxUploadSizeExceededException`，无 `@ControllerAdvice` → **500** 默认错误页 | 413（或 400） |
+| 上传缺 file part | 非 multipart 请求抛 `MultipartException` → **500** | 400 / 415 |
+
+### 探到的好消息（已写成用例守住）
+
+- 6 种坏 token 全部 `code 401 / 未登录或登录已过期`，且 `data` 为空——没有信息泄露；
+- `../` 文件名被服务端 UUID 化（`upload-<12hex>.png`），**路径穿越无效**；
+- 扩展名由 MIME 推导、客户端文件名被丢弃，`.txt` 配 `image/png` 也会落成 `.png`；
+- 重复删除购物车项两次都返回 `code 200`、购物车保持为空，符合 HTTP 幂等语义。
+
+### 断言库升级
+
+- **失败信息切到一行摘要**：新增 `describe_result()`，`assert_code/assert_status/...` 的
+  消息从整段 `repr(ApiResult)` 变成 `HTTP 200 / code 400 / 购物车为空，无法支付；url`。
+- **新增软断言 `SoftAssert` + `soft` fixture**（根 conftest，所有项目可用）：
+  累积多条失败、`soft.assert_all()` 一次抛出。已改造 2 条用例示范——
+  `test_home_aggregates_all_sections`（5 个分区）与 `test_payment_succeeds_at_exactly_1000`
+  （4 个字段 + 购物车）。失败时输出形如：
+
+  ```text
+  4 项断言失败：
+    · 订单状态：期望 'SUCCESS'，实际 'FAILED'
+    · 订单金额：期望 1000.0，实际 999.0
+    · 购物车已清标记：期望 True，实际 False
+    · 支付后购物车：期望 []，实际 ['残留一件']
+  ```
+
+- 内核单测 102 → **111 条**（新增摘要回落、软断言聚合、hint 前缀、ApiResult 助手）。
+
+### 一个必须记住的探测教训
+
+首轮探测「坏 token」时 6 种全部返回 `200 success`，看似鉴权完全失效。实际是**测试代码自己的坑**：
+注册用户时 `Set-Cookie` 留在了同一个 `requests.Session`，而后端 `CookieUtil.token` 是
+**Cookie 优先、Authorization 兜底**——放进去的坏 token 被合法 cookie 覆盖了。
+改用 `new_client()` 起干净会话后，6 种全部正确返回 401。**写鉴权/多身份用例必须用独立会话**，
+否则会得出完全相反的结论（这次是先差点误报一个「高危漏洞」）。
+
+- 回归：串行 **159 passed + 3 xfailed（8.20s）**、`-n 4` 连续 3 轮同结果、`ruff check .` 通过。

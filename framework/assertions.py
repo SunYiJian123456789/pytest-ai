@@ -2,15 +2,34 @@
 """通用接口断言库（framework 内核）。
 
 把项目里反复出现的断言模式收敛到这里，换系统后用例仍可复用同一套断言。
-断言失败信息统一带上 ApiResult 的 URL / status / code，便于定位。
+失败信息统一用 ``ApiResult.describe()`` 的一行摘要（HTTP / code / message / url），
+不再整段 repr，报告里一屏能放下多条失败。
+
+两类断言：
+
+- **硬断言** ``assert_ok / assert_code / ...``：首个不符即中断，适合「前提条件」；
+- **软断言** ``SoftAssert``：累积多条失败，末尾 ``assert_all()`` 一次抛出，
+  适合「一条响应要核对多个字段」——避免第一个字段错了就看不到后面还有哪些问题。
 """
 from typing import Any, Iterable
 
 from framework.config import env
 
 
+def describe_result(result) -> str:
+    """失败信息里优先用 ApiResult.describe() 的一行摘要，退化时回落到 repr。"""
+    describe = getattr(result, 'describe', None)
+    if callable(describe):
+        try:
+            return describe()
+        except Exception:  # noqa: BLE001 - 摘要失败不能掩盖原始断言失败
+            pass
+    return repr(result)
+
+
 def _detail(result, hint: str) -> str:
-    return ('%s → %r' % (hint, result)) if hint else repr(result)
+    text = describe_result(result)
+    return ('%s → %s' % (hint, text)) if hint else text
 
 
 def sla_scale() -> float:
@@ -40,7 +59,7 @@ def assert_elapsed(result, max_ms: float, hint: str = ''):
     budget = max_ms * scale
     assert result.elapsed_ms <= budget, (
         '%s：耗时 %d ms 超出预算 %.0f ms（基准 %.0f ms × API_SLA_SCALE %.2f）→ %s'
-        % (hint or '响应耗时', result.elapsed_ms, budget, max_ms, scale, result.describe())
+        % (hint or '响应耗时', result.elapsed_ms, budget, max_ms, scale, describe_result(result))
     )
     return result
 
@@ -51,29 +70,29 @@ def assert_ok(result, hint: str = ''):
 
 
 def assert_status(result, expected: int, hint: str = ''):
-    assert result.status == expected, '%s HTTP 状态应为 %s，实际 %s：%r' % (
-        hint, expected, result.status, result,
+    assert result.status == expected, '%s HTTP 状态应为 %s，实际 %s → %s' % (
+        hint, expected, result.status, describe_result(result),
     )
     return result
 
 
 def assert_code(result, expected: Any, hint: str = ''):
-    assert result.code == expected, '%s 业务 code 应为 %s，实际 %s：%r' % (
-        hint, expected, result.code, result,
+    assert result.code == expected, '%s 业务 code 应为 %s，实际 %s → %s' % (
+        hint, expected, result.code, describe_result(result),
     )
     return result
 
 
 def assert_code_not(result, unexpected: Any, hint: str = ''):
-    assert result.code != unexpected, '%s 业务 code 不应为 %s：%r' % (
-        hint, unexpected, result,
+    assert result.code != unexpected, '%s 业务 code 不应为 %s → %s' % (
+        hint, unexpected, describe_result(result),
     )
     return result
 
 
 def assert_message_contains(result, fragment: str, hint: str = ''):
-    assert fragment in (result.message or ''), '%s 响应消息应包含 %r，实际 %r：%r' % (
-        hint, fragment, result.message, result,
+    assert fragment in (result.message or ''), '%s 响应消息应包含 %r，实际 %r → %s' % (
+        hint, fragment, result.message, describe_result(result),
     )
     return result
 
@@ -103,3 +122,73 @@ def assert_contains_row(rows: Iterable[dict], key: str, value: Any, hint: str = 
     assert any(row.get(key) == value for row in rows), \
         '%s 未在列表中找到 %s=%r，共 %d 条' % (hint, key, value, len(rows))
     return rows
+
+
+class SoftAssert:
+    """软断言收集器：累积多条失败，末尾 ``assert_all()`` 一次抛出。
+
+    典型用法::
+
+        def test_pay(soft, api):
+            result = api.post('/api/pay', json_body={'amount': 100})
+            soft.ok(result, '支付')
+            soft.equal(result.data.get('status'), 'SUCCESS', '订单状态')
+            soft.equal(result.data.get('amount'), 100, '订单金额')
+            soft.assert_all()          # 三处问题一起报出来
+
+    方法返回布尔值，需要分支时仍可 ``if not soft.equal(...): ...``。
+    """
+
+    def __init__(self, hint: str = ''):
+        self.hint = hint
+        self.failures: list[str] = []
+
+    # ---------- 通用 ----------
+    def check(self, condition: Any, message: str) -> bool:
+        ok = bool(condition)
+        if not ok:
+            self.failures.append(message)
+        return ok
+
+    def equal(self, actual: Any, expected: Any, label: str) -> bool:
+        return self.check(actual == expected,
+                          '%s：期望 %r，实际 %r' % (label, expected, actual))
+
+    def contains(self, container: Any, expected: Any, label: str) -> bool:
+        try:
+            found = expected in container
+        except TypeError:
+            found = False
+        return self.check(found, '%s：期望包含 %r，实际 %r' % (label, expected, container))
+
+    def fields_present(self, data: Any, *fields: str, label: str = '响应') -> bool:
+        missing = [f for f in fields if not isinstance(data, dict) or f not in data]
+        return self.check(not missing, '%s：缺少字段 %s' % (label, missing))
+
+    # ---------- 针对 ApiResult ----------
+    def ok(self, result, hint: str = '') -> bool:
+        return self.check(result.ok, _detail(result, hint or '期望接口成功'))
+
+    def status(self, result, expected: int, hint: str = '') -> bool:
+        return self.check(result.status == expected,
+                          '%s：HTTP 状态期望 %s，实际 %s → %s'
+                          % (hint or 'HTTP 状态', expected, result.status, describe_result(result)))
+
+    def code(self, result, expected: Any, hint: str = '') -> bool:
+        return self.check(result.code == expected,
+                          '%s：业务 code 期望 %s，实际 %s → %s'
+                          % (hint or '业务 code', expected, result.code, describe_result(result)))
+
+    # ---------- 收口 ----------
+    @property
+    def passed(self) -> bool:
+        return not self.failures
+
+    def assert_all(self) -> None:
+        """把累积的失败合并成一条 AssertionError；全部通过则什么都不做。"""
+        if not self.failures:
+            return
+        head = '%d 项断言失败' % len(self.failures)
+        if self.hint:
+            head = '%s：%s' % (self.hint, head)
+        raise AssertionError(head + '：\n' + '\n'.join('  · %s' % row for row in self.failures))

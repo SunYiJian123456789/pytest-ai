@@ -48,18 +48,20 @@ def test_empty_cart_cannot_be_paid(api, isolated_token):
 
 @pytest.mark.smoke
 @pytest.mark.payment
-def test_payment_succeeds_at_exactly_1000(api, isolated_token, filled_cart, cleaner):
+def test_payment_succeeds_at_exactly_1000(api, soft, isolated_token, filled_cart, cleaner):
     result = api.post('/api/pay', json_body={
         'amount': 1000, 'payMethod': 'wechat',
     }, token=isolated_token)
     cleaner.order(result.data.get('orderNo') if result.data else None)
-    assert result.ok, result
+    assert result.ok, result.describe()  # 前提：支付没成功就没必要再核字段
+
     data = result.data
-    assert data['status'] == 'SUCCESS', data
-    assert data['amount'] == 1000.0, data
-    assert data['cartCleared'] is True, data
-    assert data['payMethodLabel'] == '微信支付', data
-    assert api.get('/api/cart', token=isolated_token).data == [], '成功后应清空购物车'
+    soft.equal(data.get('status'), 'SUCCESS', '订单状态')
+    soft.equal(data.get('amount'), 1000.0, '订单金额')
+    soft.equal(data.get('cartCleared'), True, '购物车已清标记')
+    soft.equal(data.get('payMethodLabel'), '微信支付', '支付方式名称')
+    soft.equal(api.get('/api/cart', token=isolated_token).data, [], '支付后购物车')
+    soft.assert_all()
     assert_order_persisted(data['orderNo'], status='SUCCESS', amount=1000)
 
 
