@@ -78,6 +78,8 @@ MODULE_LABELS = {
     'test_16_idor.py': '越权访问（IDOR）',
     'test_17_idempotency.py': '幂等与并发',
     'test_18_auth_negative.py': '鉴权异常输入',
+    'test_19_pagination.py': '分页边界',
+    'test_20_input_bounds.py': '输入边界与特殊字符',
 }
 REPORT_NOTES = (
     '后端把多数失败封装为 HTTP 200 + code 400/401/404，因此 HTTP 2xx 数量大于业务成功数量；'
