@@ -222,7 +222,7 @@ fixture 直接复用，不重复登录；结果写入 `run_summary.json` 的 `pr
 | `extract.py` | 响应值提取与用例内依赖链：`extract` 点分路径 + 数组下标，`CaseContext` 记录变量并渲染 `${name}` 占位符 |
 | `schema.py` | 响应契约校验（JSON Schema Draft 7）：校验字段存在性/类型/范围，失败定位到具体路径并附完整响应 |
 | `preflight.py` | 启动体检：检查项有序执行、结果分级（OK/WARN/SKIP/FAIL）、失败聚合成一条 `ERROR` 中止整轮 |
-| `scenario.py` | YAML 场景编排：一个 YAML 块描述多步业务链路（request/extract/assert/cleanup），`${}` 变量链与类型保持复用 extract/CaseContext，未知字段即报错，清理进报告汇总——正向链路用例不再必须写 Python |
+| `scenario.py` | YAML 场景编排（**能力储备，仅线性正向链路**）：一个 YAML 块描述多步链路（request/extract/assert/cleanup），`${}` 变量链与类型保持复用 extract/CaseContext，未知字段即报错，清理进报告汇总；负向 / 落库 / 软断言 / 多身份场景仍写 Python（见 §12 与 §24） |
 | `db.py` | PyMySQL 驱动直连、真参数绑定（`%s` 占位符）、线程本地连接复用、结构化 `records` 行、驱动缺失自动 SKIP、`strict` 模式（CI 数据库不可用直接失败） |
 | `cleanup.py` | 清理动作注册化、顺序执行、成功/跳过/失败汇总注入报告 |
 | `coverage.py` | 接口覆盖率：`ApiClient` 上报真实请求 → 路径归一化（`{id}`/`{file}`）→ 与 YAML 清单比对 → 输出 `api_coverage.md/json`；`python -m framework.coverage --min N` 供 CI 门禁 |
@@ -396,7 +396,7 @@ shopping 的 `test_update_product_name` 是完整示范，`helpers.py:create_pro
 - 回归：串行/-n 4 均 **138 passed（4.35s）**；`run_summary.json` 138/0/4.39s；归档 3 份；
   数据库清理与落库断言全部经 PyMySQL 真连执行，`ruff check .` 全绿。
 
-## 12. 场景编排层（2026-11-23）
+## 12. 场景编排层（2026-11-23，定位见 §24：能力储备，非主流程默认写法）
 
 - **新增 `framework/scenario.py`**：让正向业务链路用例也 YAML 化——一个 YAML 块描述
   多步链路（`steps[].request/extract/assert` + 场景级 `vars` + `cleanup`），由通用 test
@@ -888,3 +888,41 @@ CI 在跑用例前用 `--collect-only` 生成清单并做门禁，上述任一�
 | 报告门禁 | 正常报告无 `report_enhance_error`，退出码 0；结构变更单测确认抛错并留痕 |
 | 兜底门禁 | 正向 sweep=0；反向残留被清且真实账号保留；并行只清 1 次 |
 | 台账门禁 | `--project shopping --check` 推导路径成功，退出码 0 |
+
+---
+
+## 24. scenario 引擎取舍（2026-11-25）
+
+### 决策：保留为「能力储备」，不迁主流程
+
+上轮评估留下二选一：要么把支付 / 审批主流程迁进 YAML 引擎提高复用，要么在文档里
+明确标为能力储备。**选择后者**。三条理由：
+
+1. **现有两条 YAML 场景与 Python 专项用例刻意重叠**（审批入库 ↔ `test_11`、
+   购物车 ↔ `test_05`），引擎已有真实使用证据，不是无人调用的死代码；
+2. **主流程用例的断言强度不能退化**：`test_06` 的落库断言 + 软断言、`test_11` 的
+   自审 / 驳回 / 撤回负向面、`new_client` 多身份隔离——这些正是 YAML 引擎刻意不支持
+   （也不该支持）的能力，迁进去等于把强断言降级成「只看 HTTP/业务信封」；
+3. **真正的问题是定位歧义**：§12 原先「正向链路用例不再必须写 Python」的说法容易让
+   新人误以为主流程也该写 YAML。删引擎浪费 272 行已测代码，迁主流程降断言质量，
+   标注边界才是成本最低、收益最实的做法。
+
+### 适用边界（写用例前先对照）
+
+| 场景 | 用 YAML 场景引擎？ | 说明 |
+| --- | --- | --- |
+| 线性正向链路：创建 → 审批 → 查询 | ✅ 适合 | 只请求、断言信封、提取变量、清理 |
+| 负向 / 异常面（非法值参数化、鉴权异常、越权矩阵） | ❌ 写 Python | parametrize + marker 表达力更强 |
+| 落库断言 / 软断言 / 多身份 client 切换 | ❌ 写 Python | 引擎刻意不支持，避免退化成另一个 pytest |
+| 条件分支 / 循环 / 按响应决定下一步 | ❌ 写 Python | YAML 不引入控制流 |
+
+### 落地改动
+
+- `framework/scenario.py` 模块 docstring 写明适用边界与「不硬塞 YAML」清单；
+- `projects/shopping/testcases/test_15_scenarios.py` 标注为示范入口，列出主流程对应
+  的专项用例；`data/scenarios.yaml` 头部注释同步重叠说明；
+- `docs/新系统接入指南.md` §6.5 与脚手架模板 `test_04_scenarios.py.tpl`、
+  `scenarios.yaml.tpl` 同步定位，新项目从生成起就看到正确用法。
+
+结论：本轮**不改引擎行为、不迁移任何业务用例**，只把定位说清楚。引擎行为由
+`framework/tests/test_scenario.py` 16 条单测继续保障，两条示范场景保持原样。

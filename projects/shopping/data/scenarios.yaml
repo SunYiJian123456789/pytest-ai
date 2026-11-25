@@ -1,8 +1,13 @@
-# shopping 场景编排：一个 YAML 块描述一条多步业务链路，断言与清理由内核执行。
-# 用例入口：testcases/test_15_scenarios.py（变量由 scenario_user_token / role_tokens 提供）。
+# shopping 场景编排（能力储备示范）：一个 YAML 块描述一条多步线性正向链路，
+# 断言与清理由内核执行。用例入口：testcases/test_15_scenarios.py（变量由
+# scenario_user_token / role_tokens 提供）。
 #
-# 与 shopping 已有 Python 用例的关系：链路相同（审批入库、购物车），这里示范
-# 「新场景只写 YAML」的接入方式；断言口径与 helpers.py 保持一致。
+# 与 shopping 已有 Python 用例的关系：两条链路刻意重叠，用于示范「新线性链路
+# 只写 YAML」的接入方式；主流程以下列专项用例为准，它们含 YAML 引擎刻意不支持
+# 的落库断言 / 软断言 / 多身份 client / 负向参数化：
+#   - 商品审批入库 → testcases/test_11_admin_approvals.py
+#   - 购物车加购清空 → testcases/test_05_cart.py
+# 新增场景前先判断：若含异常面或需要更强断言，请写 Python 用例而非加到本文件。
 scenarios:
   # 管理员提交 → 审批员通过 → 前台可查（商品名唯一，xdist 并行安全）
   - name: 商品审批入库链路

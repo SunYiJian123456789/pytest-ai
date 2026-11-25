@@ -1,8 +1,15 @@
 # -*- coding: utf-8 -*-
-"""YAML 场景编排：一个 YAML 块描述一条多步业务链路，本文件只是通用入口。
+"""YAML 场景编排的示范入口（能力储备，非 shopping 主流程写法）。
 
 场景定义见 data/scenarios.yaml；断言、提取、清理由 framework.scenario 解释执行，
-失败信息带场景名与步骤名。新增场景只加 YAML，不写 Python。
+失败信息带场景名与步骤名。两条场景与专项 Python 用例刻意重叠，用于证明
+「新线性链路只加 YAML」的接入方式；主流程仍以下列专项用例为准：
+
+- 商品审批入库 → test_11_admin_approvals.py（自审/驳回/撤回等异常面）
+- 购物车加购清空 → test_05_cart.py（越权、独立用户隔离）
+
+需要落库断言、软断言、多身份 client 或负向参数化时请写 Python 用例，
+不要把 YAML 引擎当成主流程的替代品。
 """
 import pytest
 

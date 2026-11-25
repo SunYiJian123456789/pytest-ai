@@ -1,5 +1,8 @@
-# {{PROJECT}} 场景编排：一个 YAML 块描述一条多步业务链路，无需写 Python。
+# {{PROJECT}} 场景编排（能力储备，非主流程默认写法）：YAML 块描述一条多步「线性正向」链路。
 # 用例入口在 testcases/test_04_scenarios.py（按场景名参数化，内核解释执行）。
+#
+# 只支持请求 → 断言 → 提取 → 下一步的直线链路。负向 / 异常面、落库断言、软断言、
+# 多身份 client、条件分支 / 循环请写 Python 用例，不要硬塞进 YAML。
 #
 # 规则速查：
 #   steps[].request: {method, path, params, body, token, headers}；值可含 ${变量}
