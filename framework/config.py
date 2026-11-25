@@ -18,14 +18,17 @@
 import os
 from pathlib import Path
 
+from framework.state import state
+
 # 仓库根目录（framework 的上一级），与 pytest 的 rootdir 一致
 ROOT = Path(__file__).resolve().parents[1]
 
 # 运行环境名：必须在进程启动前设置（.env 里写 API_ENV 无效，避免鸡生蛋问题）
 ENV = os.getenv('API_ENV', '')
 
-# 已登记但缺失的必填键： 完整键名 -> 环境名
-MISSING_REQUIRED: dict[str, str] = {}
+# 已登记但缺失的必填键： 完整键名 -> 环境名。
+# 兼容别名：真实状态在 SessionState，reset 时原地清空，这里永远指向同一对象。
+MISSING_REQUIRED: dict[str, str] = state.missing_required
 
 
 def load_dotenv(path: Path | str | None = None):
@@ -62,12 +65,12 @@ def _env_boolean(key: str) -> bool:
 
 def missing_required() -> dict:
     """已登记但缺失的必填键快照（键名 → 环境名），供启动体检输出。"""
-    return dict(MISSING_REQUIRED)
+    return dict(state.missing_required)
 
 
 def clear_missing_required() -> None:
     """清空登记表（主要给单测用，保证用例之间互不影响）。"""
-    MISSING_REQUIRED.clear()
+    state.reset_config()
 
 
 class Settings:
@@ -95,7 +98,7 @@ class Settings:
         """
         missing = [self.key(name) for name in names if not self.get(name)]
         for key in missing:
-            MISSING_REQUIRED[key] = ENV or 'default'
+            state.missing_required[key] = ENV or 'default'
         if missing and _env_boolean('API_CONFIG_STRICT'):
             raise ValueError(
                 '缺少必填配置（环境=%s）：%s；请在进程环境变量或 .env%s 中补充'

@@ -15,6 +15,7 @@ from framework.client import ApiClient
 from framework.config import missing_required
 from framework.extract import CaseContext, extract
 from framework.preflight import Check, Preflight, Skipped
+from framework.state import state
 from projects.shopping import dbclean
 from projects.shopping.config import (
     ADMIN_ACCOUNTS, ADMIN_AUTH, BASE_URL, DATA_SOURCE, DB_STRICT, MODULE_LABELS,
@@ -41,8 +42,9 @@ def pytest_configure(config):
 
 # ---------- 启动体检 ----------
 
-# 体检时登录一次，tokens fixture 直接复用，避免「体检登录 → 用例再登录」重复一轮
-_TOKENS: dict = {}
+# 体检时登录一次，tokens fixture 直接复用，避免「体检登录 → 用例再登录」重复一轮。
+# 会话态真实存放于 SessionState 的私有槽位；别名指向同一 dict，业务代码不感知。
+_TOKENS: dict = state.namespace('shopping.tokens')
 
 
 def _fill_tokens(state: dict) -> None:

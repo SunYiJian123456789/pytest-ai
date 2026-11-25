@@ -10,30 +10,35 @@
     cleaner.register('delete order %s' % no, lambda: api.delete('/api/orders/%s' % no))
     cleaner.run()
 """
-import json
 import os
 from pathlib import Path
 
-CLEANUP_LOG: list[dict] = []
+from framework.state import state as session
+
+# 兼容别名：真实状态在 SessionState（原地清空，别名始终有效）。
+# 导入用 session 别名：本模块 record() 有局部变量 state 表示状态字符串。
+CLEANUP_LOG: list[dict] = session.cleanup_log
+
+
+def _merge_logs(payload) -> None:
+    """把 worker 落盘的清理记录合并进本进程。"""
+    if isinstance(payload, list):
+        session.cleanup_log.extend(payload)
+
+
+session.register_partition(
+    'cleanup', prefix='.cleanup_', dump=lambda: list(session.cleanup_log),
+    merge=_merge_logs)
 
 
 def dump_log(path: Path):
-    """xdist worker 退出时把本进程的清理记录落盘，供主进程汇总。"""
-    Path(path).write_text(
-        json.dumps(CLEANUP_LOG, ensure_ascii=False), encoding='utf-8',
-    )
+    """兼容旧入口：xdist worker 退出时落盘本进程的清理记录。"""
+    session.dump_partition('cleanup', path)
 
 
 def load_logs(directory: Path):
-    """主进程合并所有 worker 的清理记录并删除临时文件。"""
-    root = Path(directory)
-    for file in sorted(root.glob('.cleanup_*.json')):
-        try:
-            CLEANUP_LOG.extend(json.loads(file.read_text(encoding='utf-8')))
-        except Exception:  # noqa: BLE001 - 单个损坏文件不应影响报告
-            pass
-        finally:
-            file.unlink(missing_ok=True)
+    """兼容旧入口：主进程合并所有 worker 的清理记录并删除临时文件。"""
+    session.load_partition('cleanup', directory)
 
 
 def record(action: str, result, fallback: str = '') -> dict:
@@ -46,7 +51,7 @@ def record(action: str, result, fallback: str = '') -> dict:
         msg = getattr(result, 'message', None) or getattr(result, 'error', '') or fallback
         state, detail = 'FAIL', (msg or 'unknown error')[:200]
     entry = {'action': action, 'state': state, 'detail': detail}
-    CLEANUP_LOG.append(entry)
+    session.cleanup_log.append(entry)
     return entry
 
 

@@ -46,6 +46,7 @@ from typing import Any, Callable, List, Optional
 import pytest
 
 from framework.config import env
+from framework.state import state as session
 
 # 失败原因截断长度：体检信息要能一眼看完，不把整段堆栈塞进一行
 DETAIL_LIMIT = 300
@@ -53,22 +54,20 @@ DETAIL_LIMIT = 300
 OK, WARN, FAIL, SKIP = 'OK', 'WARN', 'FAIL', 'SKIP'
 MARKERS = {OK: '[ OK ]', WARN: '[WARN]', FAIL: '[FAIL]', SKIP: '[SKIP]'}
 
-# 最近一次体检结果：进程内全局，供 run_summary 等沉淀入口采集（xdist 下各 worker 独立）
-RECORDS: List[dict] = []
-
-# 本轮是否因体检未通过而中止（用例零执行）。覆盖率等沉淀入口据此跳过，
+# 兼容别名：真实状态在 SessionState（RECORDS 原地清空，别名始终有效）。
+# 最近一次体检结果供 run_summary 采集；aborted 标记让覆盖率跳过中止轮次，
 # 避免「环境没备好」被渲染成「覆盖率从 100% 掉到 3%」的假回归。
-ABORTED = False
+RECORDS: List[dict] = session.preflight_records
 
 
 def records() -> List[dict]:
     """返回最近一次体检结果的副本（未被执行过时为空列表）。"""
-    return [dict(row) for row in RECORDS]
+    return [dict(row) for row in session.preflight_records]
 
 
 def aborted() -> bool:
     """本轮是否被启动体检中止（用例一条都没跑）。"""
-    return ABORTED
+    return session.preflight_aborted
 
 
 @dataclass
@@ -142,7 +141,7 @@ class Preflight:
             elapsed = int((time.perf_counter() - started) * 1000)
             self.results.append(
                 CheckResult(check.name, state, detail, check.hint, elapsed))
-        RECORDS[:] = [asdict(row) for row in self.results]
+        session.preflight_records[:] = [asdict(row) for row in self.results]
         return self.results
 
     def _run_one(self, check: Check):
@@ -213,11 +212,10 @@ class Preflight:
 
     def run_or_exit(self) -> List[CheckResult]:
         """执行体检：必检项失败抛 ``pytest.UsageError``（退出码 4），否则返回结果。"""
-        global ABORTED
-        ABORTED = False
+        session.reset_preflight()
         self.run()
         if self.blocking:
-            ABORTED = True
+            session.preflight_aborted = True
             raise pytest.UsageError(self.summary())
         message = self.warn_summary()
         if message:

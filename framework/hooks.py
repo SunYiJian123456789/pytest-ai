@@ -17,23 +17,15 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from framework.cleanup import dump_log, inject_banner, load_logs
+from framework.cleanup import inject_banner
 from framework.config import ROOT, env
 from framework.preflight import records as preflight_records
+from framework.state import state
 
-# 业务项目可覆盖这些选项；enhancer 只消费这份字典，不 import 业务模块
-REPORT_OPTIONS: dict = {
-    'title': '接口自动化测试报告（pytest + requests）',
-    'project_label': 'API · REGRESSION',
-    'module_labels': {},
-    'base_url': '',
-    'database': '',
-    'data_source': '',
-    'notes': [],
-    'success_code': '200',
-}
-
-REPORT_ENHANCE_ERROR: list[str] = []
+# 兼容别名：报告选项与增强错误的真实状态在 SessionState（原地更新/清空）。
+# 业务项目可覆盖这些选项；enhancer 只消费这份字典，不 import 业务模块。
+REPORT_OPTIONS: dict = state.report_options
+REPORT_ENHANCE_ERROR: list[str] = state.report_enhance_errors
 
 
 def configure_report(**options):
@@ -50,9 +42,7 @@ def pytest_configure(config):
     config._cleanup_dump = None
     config._coverage_dump = None
     if getattr(config, 'workerinput', None):
-        worker_id = config.workerinput.get('workerid', 'worker')
-        config._cleanup_dump = ROOT / 'reports' / ('.cleanup_%s.json' % worker_id)
-        config._coverage_dump = ROOT / 'reports' / ('.api_coverage_%s.json' % worker_id)
+        config._worker_id = config.workerinput.get('workerid', 'worker')
     else:
         config._session_started = time.monotonic()  # 结果沉淀用：本轮起始时间
 
@@ -134,19 +124,12 @@ def _write_coverage(config):
 
 
 def pytest_unconfigure(config):
-    """worker 只落盘清理/覆盖率日志；主进程合并后增强报告、注入汇总横幅并归档。"""
+    """worker 一次落盘全部分区；主进程合并后增强报告、注入汇总横幅并归档。"""
     if getattr(config, 'workerinput', None):
-        dump = getattr(config, '_cleanup_dump', None)
-        if dump:
-            dump.parent.mkdir(parents=True, exist_ok=True)
-            dump_log(dump)
-        coverage_dump = getattr(config, '_coverage_dump', None)
-        if coverage_dump:
-            from framework import coverage
-            coverage_dump.parent.mkdir(parents=True, exist_ok=True)
-            coverage.dump(coverage_dump)
+        state.dump_worker(ROOT / 'reports', getattr(config, '_worker_id', 'worker'))
         return
-    load_logs(ROOT / 'reports')
+    # 一次合并全部已注册分区（清理记录 + 覆盖率命中），替代过去的两次手动 load
+    state.load_workers(ROOT / 'reports')
     if config.getoption('collectonly', default=False):
         return
     _write_coverage(config)

@@ -12,6 +12,7 @@
 D:/shopping-api-automation/
 ├── framework/                       通用内核（不依赖任何业务系统）
 │   ├── config.py                    env/.env 加载器 + Settings(prefix)
+│   ├── state.py                     SessionState 单例：集中会话态 + xdist 分区合并
 │   ├── client.py                    ApiClient / ApiResult / Envelope 响应包装适配
 │   ├── assertions.py                通用断言库（assert_ok / assert_code / ...）
 │   ├── data.py                      YAML 数据加载与 parametrize 转换
@@ -688,3 +689,51 @@ ERROR: 启动体检未通过：5 项检查中 2 项失败、2 项跳过，本次
 连续 8 次单跑全部稳定 xfailed，全量串行/并行各 2 轮均 173 passed + 5 xfailed。
 
 - 内核单测 140 → **155 条**（新增配置登记语义 12 条、中止标记 3 条）；`ruff check .` 通过。
+
+---
+
+## 20. 会话态收敛：SessionState（2026-11-25）
+
+### 问题
+
+六处模块各自持有进程级全局状态：
+
+| 模块 | 原全局变量 | 用途 |
+| --- | --- | --- |
+| `config.py` | `MISSING_REQUIRED` | 必填键登记 |
+| `preflight.py` | `RECORDS` / `ABORTED` | 体检结果、中止标记 |
+| `coverage.py` | `HITS` / `INVENTORY` | 请求命中、清单路径 |
+| `cleanup.py` | `CLEANUP_LOG` | 清理汇总 |
+| `hooks.py` | `REPORT_OPTIONS` / `REPORT_ENHANCE_ERROR` | 报告选项、增强错误 |
+| 业务 `conftest.py` | `_TOKENS` | 登录态缓存 |
+
+其中 cleanup 与 coverage **各写了一遍几乎相同的**「xdist worker 落盘 → 主进程合并」逻辑；
+跨模块判断（体检中止 → 跳过覆盖率）只能靠全局变量打信号，状态来源不唯一。
+
+### 改法
+
+- 新增 `framework/state.py`：`SessionState` 进程级单例，显式声明全部会话态字段；
+- **容器原地清空**：`reset()` / `reset_*()` 用 `.clear()` 而非重新赋值，各模块保留的
+  兼容别名（`config.MISSING_REQUIRED`、`preflight.RECORDS`、`coverage.HITS`、
+  `cleanup.CLEANUP_LOG` 等）永远指向同一对象，外部代码与既有测试零改写；
+- **xdist 分区注册表**：cleanup / coverage 各自注册「前缀 + dump + merge」，
+  worker 退出由 `state.dump_worker()` 一次写出全部分区，主进程由
+  `state.load_workers()` 一次合并——删掉两处重复的落盘/合并代码；
+- 业务登录态用 `state.namespace('shopping.tokens')` 私有槽位，内核不认识业务字段；
+- 标量状态（`ABORTED`、`INVENTORY`）改为读写 `state.*`，消除第二来源。
+
+### 兼容性
+
+公开 API 全部保留：`coverage.record/reset/dump/load_dumps/collect_main`、
+`preflight.records/aborted`、`config.missing_required/clear_missing_required`、
+`cleanup.dump_log/load_logs`、`hooks.configure_report` 签名与行为不变。
+
+### 实测
+
+| 验证项 | 结果 |
+| --- | --- |
+| `ruff check .` | 通过 |
+| 内核单测 | 155 → **169 条**（新增 `test_state.py` 14 条：别名存活、隔离、分区合并、并发、损坏文件） |
+| 收集阶段 `--collect-only` | 178 条，退出码 0 |
+| 全量串行 | 173 passed + 5 xfailed，覆盖率 43/43 |
+| 全量 `-n 4` | 173 passed + 5 xfailed，覆盖率 43/43，worker 临时文件无残留 |

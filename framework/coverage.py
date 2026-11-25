@@ -16,24 +16,24 @@ xdist 下每个 worker 各自把自己的命中落盘（``.api_coverage_<worker>
 """
 import json
 import re
-import threading
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import yaml
 
+from framework.state import state
+
 # 归一化占位符：纯数字段 → {id}，最后一段带扩展名的文件名 → {file}
 _ID_SEGMENT = re.compile(r'^\d+$')
 
-_lock = threading.Lock()
-HITS: dict[tuple[str, str], dict] = {}
-INVENTORY: Path | None = None
+# 兼容别名：真实状态在 SessionState（HITS 原地清空，别名始终有效）。
+# INVENTORY 是标量路径，读写统一走 state.coverage_inventory。
+HITS: dict[tuple[str, str], dict] = state.coverage_hits
 
 
 def configure(inventory=None) -> None:
     """业务 conftest 在 pytest_configure 中调用，指定接口清单路径。"""
-    global INVENTORY
-    INVENTORY = Path(inventory) if inventory else None
+    state.coverage_inventory = Path(inventory) if inventory else None
 
 
 def normalize_path(url_or_path: str) -> str:
@@ -58,48 +58,49 @@ def normalize_path(url_or_path: str) -> str:
 def record(method: str, url: str, status: int = 0) -> None:
     """记一次真实请求；重复调用只累加计数，不改变键。"""
     key = (method.upper(), normalize_path(url))
-    with _lock:
-        entry = HITS.setdefault(key, {'count': 0, 'statuses': {}})
+    with state.lock:
+        entry = state.coverage_hits.setdefault(key, {'count': 0, 'statuses': {}})
         entry['count'] += 1
         bucket = str(status)
         entry['statuses'][bucket] = entry['statuses'].get(bucket, 0) + 1
 
 
 def reset() -> None:
-    with _lock:
-        HITS.clear()
+    state.reset_coverage()
 
 
 def snapshot() -> dict:
-    with _lock:
-        return {'%s %s' % method_path: dict(value) for method_path, value in HITS.items()}
+    with state.lock:
+        return {'%s %s' % method_path: dict(value)
+                for method_path, value in state.coverage_hits.items()}
 
 
 # ---------------- xdist 落盘 / 合并 ----------------
 
+def _merge_hits(payload) -> None:
+    """把 worker 落盘的命中合并进本进程（键为 'METHOD /path' 字符串）。"""
+    with state.lock:
+        for key, value in (payload or {}).items():
+            method, _, path = key.partition(' ')
+            entry = state.coverage_hits.setdefault(
+                (method, path), {'count': 0, 'statuses': {}})
+            entry['count'] += int(value.get('count', 0))
+            for status, times in (value.get('statuses') or {}).items():
+                entry['statuses'][status] = entry['statuses'].get(status, 0) + int(times)
+
+
+state.register_partition(
+    'coverage', prefix='.api_coverage_', dump=snapshot, merge=_merge_hits)
+
+
 def dump(path: Path) -> None:
-    """worker 退出时落盘本进程命中。"""
-    Path(path).write_text(
-        json.dumps(snapshot(), ensure_ascii=False), encoding='utf-8')
+    """兼容旧入口：worker 退出时落盘本进程命中。"""
+    state.dump_partition('coverage', path)
 
 
 def load_dumps(directory: Path) -> None:
-    """主进程合并所有 worker 的命中并删除临时文件。"""
-    root = Path(directory)
-    for file in sorted(root.glob('.api_coverage_*.json')):
-        try:
-            payload = json.loads(file.read_text(encoding='utf-8'))
-        except Exception:  # noqa: BLE001 - 单个损坏文件不影响汇总
-            payload = {}
-        finally:
-            file.unlink(missing_ok=True)
-        with _lock:
-            for key, value in (payload or {}).items():
-                method, _, path = key.partition(' ')
-                entry = HITS.setdefault((method, path), {'count': 0, 'statuses': {}})
-                entry['count'] += int(value.get('count', 0))
-                for status, times in (value.get('statuses') or {}).items():
-                    entry['statuses'][status] = entry['statuses'].get(status, 0) + int(times)
+    """兼容旧入口：主进程合并所有 worker 的命中并删除临时文件。"""
+    state.load_partition('coverage', directory)
 
 
 # ---------------- 清单与报告 ----------------
@@ -260,10 +261,11 @@ def write_reports(reports_dir: Path, report: dict) -> dict:
 def collect_main(reports_dir: Path) -> dict:
     """主进程：合并 worker 命中 → 读清单 → 出报告 → 落盘。返回报告字典。"""
     load_dumps(reports_dir)
-    if INVENTORY is None:
+    inventory = state.coverage_inventory
+    if inventory is None:
         return {}
-    report = build_report(load_inventory(INVENTORY))
-    report['inventory'] = str(INVENTORY)
+    report = build_report(load_inventory(inventory))
+    report['inventory'] = str(inventory)
     write_reports(reports_dir, report)
     return report
 

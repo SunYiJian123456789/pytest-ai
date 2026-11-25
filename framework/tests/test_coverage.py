@@ -163,8 +163,8 @@ class TestXDistsMerge:
         coverage.load_dumps(tmp_path)  # 不抛
         assert coverage.snapshot() == {}
 
-    def test_collect_main_without_inventory_returns_empty(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(coverage, 'INVENTORY', None)
+    def test_collect_main_without_inventory_returns_empty(self, tmp_path):
+        coverage.configure(None)
         assert coverage.collect_main(tmp_path) == {}
 
 
