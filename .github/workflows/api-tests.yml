@@ -58,6 +58,18 @@ jobs:
         shell: bash
         run: python -m pytest framework/tests -o addopts= -q
 
+      # xfail 台账门禁：收集阶段即可校验，不必等用例执行。
+      # 「修好后端忘删 xfail」→ 台账 fixed 但标记还在；「删了标记忘改台账」→ 反向报错；
+      # reason 不带缺陷号 → XPASS 时无法反查，同样判失败。
+      - name: Known defects ledger (xfail vs ledger)
+        shell: bash
+        run: |
+          python -m pytest --collect-only -q >/dev/null
+          python -m framework.defects \
+            --ledger projects/shopping/data/known_defects.yaml \
+            --project shopping --write reports/known_defects.md --check
+          cat reports/known_defects.md >> "$GITHUB_STEP_SUMMARY"
+
       # push / PR / 手动选择 smoke → 快跑；定时 / 手动选择 full → 全量
       - name: Run smoke suite (push / PR)
         if: >-
@@ -110,5 +122,7 @@ jobs:
             reports/run_summary.json
             reports/api_coverage.md
             reports/api_coverage.json
+            reports/known_defects.md
+            reports/shopping_xfail_manifest.json
             reports/failed_requests/
           if-no-files-found: ignore

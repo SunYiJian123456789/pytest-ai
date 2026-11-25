@@ -19,7 +19,7 @@ def _submit(api, tokens, cleaner, payload):
 
 @pytest.mark.xfail(
     strict=True,
-    reason='已知缺陷（后端）：注册接口没有用户名校验，sys_user.username 是 varchar(64)，'
+    reason='[DEF-004] 已知缺陷（后端）：注册接口没有用户名校验，sys_user.username 是 varchar(64)，'
            '65 个字符起触发 SQL 数据过长异常，未处理 → 500 默认错误页。'
            '64 字符可成功、65 字符必 500，边界已实测确认。应有 400「用户名长度不合法」。',
 )
@@ -49,7 +49,7 @@ def test_product_rejects_oversize_subtitle(api, tokens, cleaner):
 
 @pytest.mark.xfail(
     strict=True,
-    reason='已知缺陷（后端）：商品描述没有长度校验，description 是 TEXT（65535 字节），'
+    reason='[DEF-005] 已知缺陷（后端）：商品描述没有长度校验，description 是 TEXT（65535 字节），'
            '25000 个汉字约 75000 字节直接撞库，未处理 → 500 默认错误页。'
            '应在入库前校验并返回 400。',
 )

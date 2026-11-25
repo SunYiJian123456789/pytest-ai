@@ -21,6 +21,10 @@ reports/run_summary.json
 reports/api_coverage.md
 reports/api_coverage.json
 reports/.api_coverage_*.json
+reports/known_defects.md
+reports/xfail_manifest.json
+reports/*_xfail_manifest.json
+reports/.xfail_manifest_*.json
 
 # 编辑器与工具本地状态
 .idea/

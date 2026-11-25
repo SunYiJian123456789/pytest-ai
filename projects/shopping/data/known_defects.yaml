@@ -1,0 +1,86 @@
+# 已知缺陷台账（shopping 项目）
+#
+# 每条缺陷绑定一个 strict=True 的 xfail 用例。后端修复后请同时做两件事：
+#   1) 删除用例上的 @pytest.mark.xfail；
+#   2) 把 status 从 open 改为 fixed，并补固定日期/版本。
+# CI 用 `python -m framework.defects --check` 双向校验，任一处遗漏都会失败。
+#
+# 字段说明：
+#   id          缺陷编号（DEF-001 格式），必须出现在 xfail 的 reason 里
+#   test        完整 pytest nodeid（文件::用例）
+#   status      open=缺陷存在且用例带 xfail；fixed=已修复且用例无 xfail
+#   title       一句话标题
+#   symptom     实测现象（含关键边界值）
+#   expected    正确行为（用例的断言目标）
+#   endpoint    对应后端接口
+#   severity    high / medium / low
+#   discovered  发现日期
+#   owner       责任侧（backend / frontend / ops）
+#   fixed_date  修复日期（status=fixed 时填写）
+version: 1
+project: shopping
+defects:
+  - id: DEF-001
+    test: projects/shopping/testcases/test_12_upload.py::test_upload_requires_file
+    status: open
+    title: 非 multipart 请求缺 file part 时上传接口返回 500
+    symptom: >-
+      Spring 的 MultipartException 无 @ControllerAdvice 处理，回落默认错误页，
+      HTTP 500 且响应无 code/message 信封。
+    expected: 客户端请求错误应返回 400 或 415，并带统一业务错误信封。
+    endpoint: POST /api/upload
+    severity: medium
+    discovered: 2026-11-25
+    owner: backend
+
+  - id: DEF-002
+    test: projects/shopping/testcases/test_12_upload.py::test_upload_rejects_oversize_file
+    status: open
+    title: 上传文件超过 10MB 上限时返回 500
+    symptom: >-
+      application.yml 配了 multipart.max-file-size=10MB；11MB、20MB 实测均触发
+      MaxUploadSizeExceededException，未处理直接回落 500 默认错误页。
+    expected: 超过上限应返回 413 Payload Too Large（或 400），并带业务错误码。
+    endpoint: POST /api/upload
+    severity: medium
+    discovered: 2026-11-25
+    owner: backend
+
+  - id: DEF-003
+    test: projects/shopping/testcases/test_17_idempotency.py::test_concurrent_payment_creates_single_order
+    status: open
+    title: 同一购物车并发支付产生多张成功订单
+    symptom: >-
+      支付链路无幂等键也无行锁：先查购物车再插入订单，多线程同时读到非空购物车
+      各自下单。3 线程 × 3 轮实测每轮均能生成 3 张 SUCCESS 订单（重复扣款）。
+    expected: 同一购物车并发支付只应成功一单，其余返回「购物车为空」。
+    endpoint: POST /api/pay
+    severity: high
+    discovered: 2026-11-25
+    owner: backend
+
+  - id: DEF-004
+    test: projects/shopping/testcases/test_20_input_bounds.py::test_register_rejects_oversize_username
+    status: open
+    title: 注册接口未校验用户名长度，超列宽触发 500
+    symptom: >-
+      sys_user.username 为 varchar(64)，65 字符起触发 SQL 数据过长异常，未处理
+      直接回落 500。64 字符成功、65 字符必 500，边界已实测确认。
+    expected: 入库前校验并返回 400「用户名长度不合法」。
+    endpoint: POST /api/auth/register
+    severity: medium
+    discovered: 2026-11-25
+    owner: backend
+
+  - id: DEF-005
+    test: projects/shopping/testcases/test_20_input_bounds.py::test_product_rejects_oversize_description
+    status: open
+    title: 商品描述未校验长度，超 TEXT 容量触发 500
+    symptom: >-
+      description 为 TEXT（65535 字节），25000 个汉字约 75000 字节直接撞库，
+      未处理回落 500 默认错误页。
+    expected: 入库前校验长度并返回 400。
+    endpoint: POST /api/admin/products
+    severity: medium
+    discovered: 2026-11-25
+    owner: backend

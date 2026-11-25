@@ -16,10 +16,10 @@ SAFE_NAME = re.compile(r'^/images/upload-[0-9a-f]{12}\.(png|jpg|webp|gif)$')
 
 @pytest.mark.xfail(
     strict=True,
-    reason='已知缺陷（后端）：非 multipart 请求缺 file part 时，Spring 的 MultipartException '
-           '无人处理，直接返回 500 并回落到默认错误页（无 code/message 包装）。'
-           '正确行为应为 400 或 415。修复后本用例会变成 XPASS 并被 strict 判失败，'
-           '届时删除本标记即可。',
+    reason='[DEF-001] 已知缺陷（后端）：非 multipart 请求缺 file part 时，'
+           'Spring 的 MultipartException 无人处理，直接返回 500 并回落到默认错误页'
+           '（无 code/message 包装）。正确行为应为 400 或 415。'
+           '修复后本用例会 XPASS，请按 DEF-001 台账同时删除标记并改状态为 fixed。',
 )
 def test_upload_requires_file(api):
     """缺少 multipart body 属于客户端请求错误，应由 4xx 拒绝，而不是服务端 500。"""
@@ -61,7 +61,7 @@ def test_upload_image_and_fetch_from_backend(api, cleaner):
 
 @pytest.mark.xfail(
     strict=True,
-    reason='已知缺陷（后端）：application.yml 配了 multipart.max-file-size=10MB，'
+    reason='[DEF-002] 已知缺陷（后端）：application.yml 配了 multipart.max-file-size=10MB，'
            '超限时 Spring 抛 MaxUploadSizeExceededException，项目没有 @ControllerAdvice 处理，'
            '直接回落 500 默认错误页（无 code/message）。11MB、20MB 实测均返回 500。'
            '正确行为应为 413 Payload Too Large（或 400）。',

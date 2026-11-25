@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from framework import coverage, hooks
+from framework import coverage, defects, hooks
 from framework.cleanup import CleanupRegistry, remove_uploaded_files
 from framework.client import ApiClient
 from framework.config import missing_required
@@ -38,6 +38,8 @@ def pytest_configure(config):
         success_code=200,
     )
     coverage.configure(Path(__file__).parent / 'data' / 'api_inventory.yaml')
+    defects.configure(Path(__file__).parent / 'data' / 'known_defects.yaml',
+                      project='shopping')
 
 
 # ---------- 启动体检 ----------

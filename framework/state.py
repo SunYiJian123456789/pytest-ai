@@ -78,6 +78,9 @@ class SessionState:
         # —— 标量字段 ——
         self.preflight_aborted: bool = False
         self.coverage_inventory: Path | None = None
+        # 已知缺陷台账路径与项目名（业务 conftest 登记，清单按项目隔离避免互相覆盖）
+        self.defects_ledger: Path | None = None
+        self.defects_project: str | None = None
         # 已知清单外请求白名单 {(METHOD, path)}，负向用例故意打的不存在路径登记在这里
         self.coverage_allowed_extra: set[tuple[str, str]] = set()
 
@@ -96,6 +99,8 @@ class SessionState:
             self.report_options.update(DEFAULT_REPORT_OPTIONS)
             self.preflight_aborted = False
             self.coverage_inventory = None
+            self.defects_ledger = None
+            self.defects_project = None
             self.coverage_allowed_extra.clear()
 
     def reset_config(self) -> None:

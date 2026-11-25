@@ -76,7 +76,7 @@ def test_repeated_delete_of_cart_item_is_idempotent(api, buyer, cart_item):
 
 @pytest.mark.xfail(
     strict=True,
-    reason='已知缺陷（后端）：支付链路没有幂等键也没有行锁——PayController 先 '
+    reason='[DEF-003] 已知缺陷（后端）：支付链路没有幂等键也没有行锁——PayController 先 '
            'cartMapper.findByUser 再 PayService.record，多个请求同时读到非空购物车就会'
            '各自插入订单。实测 3 线程并发支付同一购物车会生成 3 张 SUCCESS 订单（重复扣款）。'
            '预期：同一购物车并发支付只应成功一单，其余返回「购物车为空」。',

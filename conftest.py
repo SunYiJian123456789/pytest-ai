@@ -9,8 +9,8 @@ import pytest
 from framework.assertions import SoftAssert
 from framework.hooks import (  # noqa: F401 - 这些函数由 pytest 作为 hook 调用
     REPORT_ENHANCE_ERROR, REPORT_OPTIONS, configure_report,
-    pytest_configure, pytest_html_report_title, pytest_terminal_summary,
-    pytest_unconfigure,
+    pytest_collection_modifyitems, pytest_configure, pytest_html_report_title,
+    pytest_terminal_summary, pytest_unconfigure,
 )
 
 

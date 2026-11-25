@@ -47,6 +47,62 @@ def pytest_configure(config):
         config._session_started = time.monotonic()  # 结果沉淀用：本轮起始时间
 
 
+def _manifest_name(project: str | None = None) -> str:
+    """主清单文件名：按项目隔离，内核单测不会覆盖业务项目的清单。"""
+    return '%sxfail_manifest.json' % ('%s_' % project if project else '')
+
+
+def _shard_pattern(project: str | None = None) -> str:
+    return '.%sxfail_manifest_*.json' % ('%s_' % project if project else '')
+
+
+def pytest_collection_modifyitems(items, config):
+    """落盘本轮收集清单，供 ``python -m framework.defects --check`` 双向校验。
+
+    xdist 下收集钩子只在 worker 触发，主进程拿不到 items——所以 worker 各写
+    一份带 id 的分片（每个 worker 收集到的全集相同），由主进程在结果沉淀前
+    汇总成 ``xfail_manifest.json``。``--collect-only`` 单进程直接写主文件。
+    """
+    from framework.defects import collect_manifest, write_manifest
+    worker = getattr(config, 'workerinput', None)
+    project = state.defects_project
+    reports_dir = ROOT / 'reports'
+    target = (reports_dir / ('.%sxfail_manifest_%s.json'
+                             % ('%s_' % project if project else '',
+                                worker.get('workerid', 'worker')))
+              if worker else reports_dir / _manifest_name(project))
+    try:
+        write_manifest(collect_manifest(items), target)
+    except OSError:  # 沉淀失败不影响测试结论
+        pass
+
+
+def _merge_manifest_shards():
+    """主进程汇总 worker 分片；任取一份完整清单即可，随后删除分片。"""
+    root = ROOT / 'reports'
+    project = state.defects_project
+    shards = sorted(root.glob(_shard_pattern(project)))
+    if not shards:
+        return
+    payload = None
+    for file in shards:
+        try:
+            candidate = json.loads(file.read_text(encoding='utf-8'))
+            if payload is None and candidate.get('collected'):
+                payload = candidate
+        except (OSError, ValueError):  # noqa: BLE001 - 单个坏分片不影响整体
+            pass
+        finally:
+            # 不能 break：跳出循环会让后续分片漏删，污染下一轮统计
+            file.unlink(missing_ok=True)
+    if payload is not None:
+        try:
+            (root / _manifest_name(project)).write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+        except OSError:
+            pass
+
+
 def pytest_html_report_title(report):
     report.title = REPORT_OPTIONS['title']
 
@@ -55,6 +111,7 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     """结果沉淀：本轮结果概要写入 reports/run_summary.json（仅主进程）。"""
     if getattr(config, 'workerinput', None) or config.getoption('collectonly', default=False):
         return
+    _merge_manifest_shards()
     stats = terminalreporter.stats
     counts = {key: len(stats.get(key) or [])
               for key in ('passed', 'failed', 'error', 'skipped', 'xfailed', 'xpassed')}
@@ -73,6 +130,28 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     preflight = preflight_records()
     if preflight:
         summary['preflight'] = preflight
+
+    # 已知缺陷台账：业务项目登记路径后，把一致性校验结果一并沉淀，
+    # 这样「哪条 xfail 归属哪条缺陷、是否已解标记」事后可追溯。
+    if state.defects_ledger is not None:
+        try:
+            from framework.defects import (check, load_ledger, load_manifest,
+                                           render_markdown, render_terminal)
+            ledger = load_ledger(state.defects_ledger)
+            manifest = load_manifest(
+                ROOT / 'reports' / _manifest_name(state.defects_project))
+            result = check(ledger, manifest)
+            summary['known_defects'] = dict(result['stats'], ok=result['ok'])
+            reports_dir = ROOT / 'reports'
+            reports_dir.mkdir(parents=True, exist_ok=True)
+            (reports_dir / 'known_defects.md').write_text(
+                render_markdown(ledger, result), encoding='utf-8')
+            terminalreporter.write_line('')
+            for line in render_terminal(result).splitlines():
+                terminalreporter.write_line(line)
+        except (OSError, ValueError) as exc:  # 台账沉淀失败不影响测试结论
+            summary['known_defects_error'] = str(exc)[:200]
+
     try:
         target = ROOT / 'reports' / 'run_summary.json'
         target.parent.mkdir(parents=True, exist_ok=True)

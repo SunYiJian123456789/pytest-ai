@@ -782,3 +782,49 @@ ERROR: 启动体检未通过：5 项检查中 2 项失败、2 项跳过，本次
 期间发现并修正一个真实误判：静态图片回源返回 HTTP 200 二进制，旧 `result.ok`
 因无业务 code 判 False，一度被标成"仅错误态触达"；改由 `coverage_success()` 特判
 后恢复为有效覆盖。
+
+---
+
+## 22. 已知缺陷台账：xfail 与缺陷记录双向绑定（2026-11-25）
+
+### 问题
+
+5 条 `xfail(strict=True)` 用例把后端缺陷钉在了测试里，但存在两个缺口：
+
+- `reason` 只描述现象、没有缺陷编号，XPASS 让 CI 变红时说不清归属；
+- 后端修好后，开发者常只删标记、忘改缺陷状态（或反过来），下一轮才知道漏了一处。
+
+### 改法
+
+- **单一事实源** `projects/shopping/data/known_defects.yaml`：每条缺陷带 `DEF-001` 编号、
+  绑定的用例 nodeid、状态 open/fixed、现象、预期、接口、级别、发现日期；
+- **收集清单自动落盘**：pytest 收集钩子写 `reports/shopping_xfail_manifest.json`
+  （全部 nodeid + xfail 子集）。按项目名隔离——跑内核单测不会覆盖业务项目的清单；
+  xdist 下 worker 各写分片，主进程汇总后清理；
+- **双向校验** `python -m framework.defects --project shopping --check`：
+  - 台账 open + 用例无 xfail → 提示改 fixed；
+  - 台账 fixed + 用例仍有 xfail → 提示删标记（否则修补后 XPASS 变红）；
+  - 用例有 xfail 但台账没登记 → 孤儿标记；
+  - 台账 nodeid 未被收集到 → 拼写错或用例已删；
+  - xfail 非 strict、reason 缺缺陷号 → 同样判失败。
+- **reason 前缀带编号**：5 条 xfail 的 reason 均以 `[DEF-00x]` 开头，XPASS 输出可直接反查台账；
+- **报告沉淀**：每轮 `run_summary.json` 写入 `known_defects` 统计，`known_defects.md`
+  由台账渲染（不再手工维护第二份 Markdown），CI 摘要和 artifact 都带上。
+
+### 修复缺陷时的标准动作（两步，缺一不可）
+
+1. 删除用例上的 `@pytest.mark.xfail`；
+2. 台账里把该条 `status` 改为 `fixed`，补 `fixed_date`。
+
+CI 在跑用例前用 `--collect-only` 生成清单并做门禁，上述任一处遗漏都会立即失败。
+
+### 实测
+
+| 验证项 | 结果 |
+| --- | --- |
+| `ruff check .` | 通过 |
+| 内核单测 | 190 → **230 条**（新增 `test_defects.py` 40 条：台账结构、双向校验、CLI、xdist 分片、项目隔离） |
+| 收集 + 门禁 | 178 条用例、5 条 xfail 全部 strict 且带编号，退出码 0 |
+| 反向：台账改 fixed 忘删标记 | 抓到 DEF-001，退出码 1；恢复后归零 |
+| 反向：reason 缺编号 | 抓到 DEF-003，退出码 1；恢复后归零 |
+| 全量串行 / `-n 4` | 173 passed + 5 xfailed，双口径覆盖率 43/43；台账摘要进终端与报告，分片无残留 |
