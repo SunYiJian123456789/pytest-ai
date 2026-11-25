@@ -10,6 +10,10 @@ import pytest
 
 from projects.shopping.helpers import register_user
 
+# 并发用例的规模：线程数 × 轮数。轮数是为了不让「刚好没撞上」把缺陷误判成已修复
+CONCURRENT_THREADS = 3
+CONCURRENT_ROUNDS = 3
+
 
 @pytest.fixture
 def buyer(api, cleaner):
@@ -78,33 +82,52 @@ def test_repeated_delete_of_cart_item_is_idempotent(api, buyer, cart_item):
            '预期：同一购物车并发支付只应成功一单，其余返回「购物车为空」。',
 )
 @pytest.mark.idempotency
-def test_concurrent_payment_creates_single_order(api, buyer, cart_item, cleaner, new_client):
-    """同一购物车被并发支付时，只应产生一张订单（幂等键或行锁保证）。"""
+def test_concurrent_payment_creates_single_order(api, buyer, cleaner, new_client):
+    """同一购物车被并发支付时，只应产生一张订单（幂等键或行锁保证）。
+
+    竞态窗口很窄（SELECT 购物车 → INSERT 订单之间），线程启动时间差几毫秒就错过。
+    所以用栅栏让三个请求**同时**发出，并跑多轮——任何一轮出现重复订单即判定缺陷存在，
+    避免「这轮刚好没撞上」把缺陷误判成已修复（strict xfail 会把误判变 XPASS 报错）。
+    """
     token = buyer['token']
-    responses = []
-    lock = threading.Lock()
+    product = api.get('/api/products').data
+    assert product, '需要至少一件在售商品'
+    product_id = product[0]['id']
 
-    def pay():
-        # 每个线程独立客户端：后端 Cookie 优先于 Authorization，共用 session 会串号
-        client = new_client(token)
-        result = client.post('/api/pay', json_body={'amount': 100}, token=token)
-        with lock:
-            responses.append(result)
+    duplicated = []
+    for round_no in range(CONCURRENT_ROUNDS):
+        added = api.post('/api/cart/add', json_body={
+            'productId': product_id, 'quantity': 1,
+        }, token=token)
+        assert added.ok, added.describe()
 
-    threads = [threading.Thread(target=pay) for _ in range(3)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
+        barrier = threading.Barrier(CONCURRENT_THREADS)
+        responses: list = []
+        lock = threading.Lock()
 
-    assert len(responses) == 3, '三个线程都应拿到响应'
-    for result in responses:
-        if isinstance(result.data, dict) and result.data.get('orderNo'):
-            cleaner.order(result.data['orderNo'])
+        def pay():
+            # 每个线程独立客户端：后端 Cookie 优先于 Authorization，共用 session 会串号
+            client = new_client(token)
+            barrier.wait(timeout=10)  # 等齐后同时发出，命中同一次竞态窗口
+            result = client.post('/api/pay', json_body={'amount': 100}, token=token)
+            with lock:
+                responses.append(result)
 
-    succeeded = [r for r in responses if r.ok]
-    assert len(succeeded) == 1, (
-        '并发支付同一购物车只应成功一单，实际 %d 单：%s'
-        % (len(succeeded), [r.describe() for r in succeeded])
+        threads = [threading.Thread(target=pay) for _ in range(CONCURRENT_THREADS)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert len(responses) == CONCURRENT_THREADS, '每个线程都应拿到响应'
+        for result in responses:
+            if isinstance(result.data, dict) and result.data.get('orderNo'):
+                cleaner.order(result.data['orderNo'])
+
+        succeeded = [r for r in responses if r.ok]
+        if len(succeeded) != 1:
+            duplicated.append('第 %d 轮成功 %d 单' % (round_no + 1, len(succeeded)))
+
+    assert not duplicated, (
+        '并发支付同一购物车只应成功一单，实际出现重复下单：%s' % '；'.join(duplicated)
     )
-    assert len(_success_orders(api, token)) == 1, '库中只应有一张成功订单'

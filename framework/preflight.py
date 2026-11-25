@@ -56,10 +56,19 @@ MARKERS = {OK: '[ OK ]', WARN: '[WARN]', FAIL: '[FAIL]', SKIP: '[SKIP]'}
 # 最近一次体检结果：进程内全局，供 run_summary 等沉淀入口采集（xdist 下各 worker 独立）
 RECORDS: List[dict] = []
 
+# 本轮是否因体检未通过而中止（用例零执行）。覆盖率等沉淀入口据此跳过，
+# 避免「环境没备好」被渲染成「覆盖率从 100% 掉到 3%」的假回归。
+ABORTED = False
+
 
 def records() -> List[dict]:
     """返回最近一次体检结果的副本（未被执行过时为空列表）。"""
     return [dict(row) for row in RECORDS]
+
+
+def aborted() -> bool:
+    """本轮是否被启动体检中止（用例一条都没跑）。"""
+    return ABORTED
 
 
 @dataclass
@@ -204,8 +213,11 @@ class Preflight:
 
     def run_or_exit(self) -> List[CheckResult]:
         """执行体检：必检项失败抛 ``pytest.UsageError``（退出码 4），否则返回结果。"""
+        global ABORTED
+        ABORTED = False
         self.run()
         if self.blocking:
+            ABORTED = True
             raise pytest.UsageError(self.summary())
         message = self.warn_summary()
         if message:

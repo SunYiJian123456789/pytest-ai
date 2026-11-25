@@ -5,7 +5,7 @@
 """
 import pytest
 
-from framework.preflight import RECORDS, Check, Preflight, Skipped, records
+from framework.preflight import RECORDS, Check, Preflight, Skipped, aborted, records
 
 
 def ok_check(name='通过项', detail='done', **kw):
@@ -198,3 +198,23 @@ class TestEnvFlags:
         monkeypatch.delenv('API_PREFLIGHT_STRICT', raising=False)
         preflight = Preflight([])
         assert preflight.enabled is True and preflight.strict is True
+
+
+class TestAbortedFlag:
+    def test_success_leaves_flag_false(self):
+        check = Check('ok', lambda: 'fine')
+        Preflight([check]).run_or_exit()
+        assert aborted() is False
+
+    def test_blocking_failure_sets_flag(self):
+        check = Check('bad', lambda: (_ for _ in ()).throw(AssertionError('炸了')))
+        with pytest.raises(pytest.UsageError):
+            Preflight([check]).run_or_exit()
+        assert aborted() is True
+
+    def test_non_blocking_failure_does_not_set_flag(self, monkeypatch):
+        monkeypatch.setenv('API_PREFLIGHT_STRICT', '0')
+        check = Check('warn', lambda: (_ for _ in ()).throw(AssertionError('只是告警')))
+        with pytest.warns(UserWarning):
+            Preflight([check]).run_or_exit()
+        assert aborted() is False

@@ -108,6 +108,14 @@ def _archive_report(target: Path):
 def _write_coverage(config):
     """主进程：合并各 worker 的命中，与接口清单比对后落盘并在终端打表。"""
     from framework import coverage
+    from framework.preflight import aborted
+    if aborted():
+        print('[coverage] 本轮因启动体检未通过而中止，跳过覆盖率统计'
+              '（否则会把「环境没备好」写成覆盖率骤降的假回归）')
+        return
+    if not coverage.snapshot():
+        print('[coverage] 本轮没有任何请求，跳过覆盖率统计')
+        return
     try:
         report = coverage.collect_main(ROOT / 'reports')
     except Exception as exc:  # noqa: BLE001 - 覆盖率统计失败不应影响测试结论

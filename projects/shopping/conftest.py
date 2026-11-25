@@ -12,6 +12,7 @@ import pytest
 from framework import coverage, hooks
 from framework.cleanup import CleanupRegistry, remove_uploaded_files
 from framework.client import ApiClient
+from framework.config import missing_required
 from framework.extract import CaseContext, extract
 from framework.preflight import Check, Preflight, Skipped
 from projects.shopping import dbclean
@@ -145,7 +146,18 @@ def _preflight_checks() -> list:
         _fill_tokens(_TOKENS)
         return '用户 1 个 + 管理端 %d 个角色登录成功' % len(ADMIN_ACCOUNTS)
 
+    def config_complete():
+        """必填配置齐备：CFG.require 只登记不抛错，缺项在这里一次性说清。"""
+        missing = missing_required()
+        if missing:
+            raise AssertionError('缺少必填配置：%s（请在 .env 或进程环境变量中补充）'
+                                 % '、'.join('%s[%s]' % (key, env_name)
+                                            for key, env_name in sorted(missing.items())))
+        return '必填键齐备'
+
     return [
+        Check('必填配置', config_complete,
+              hint='照 .env.example 补齐缺项；CI 从 .env.example 生成 .env 即为此项服务'),
         Check('后端可达', service_reachable,
               hint='先启动被测服务（D:/shopping/start-backend.bat）；'
                    '并确认 .env 的 SHOPPING_API_BASE_URL=%s' % BASE_URL),

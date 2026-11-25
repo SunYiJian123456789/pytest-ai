@@ -136,7 +136,7 @@ class TestRender:
     def test_terminal_summary_is_compact(self):
         coverage.record('GET', 'http://h/api/health', 200)
         text = coverage.render_terminal(coverage.build_report(INVENTORY))
-        assert text.startswith('[coverage] 接口覆盖率 1/3 = 33.3%')
+        assert text.startswith('[coverage] 本次运行接口覆盖率 1/3 = 33.3%')
         assert '未覆盖 2 条' in text
 
 

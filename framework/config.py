@@ -11,7 +11,7 @@
 
     cfg = Settings('DEMO_')
     BASE_URL = cfg.get('API_BASE_URL', 'http://127.0.0.1:8080')
-    cfg.require('UPLOAD_DIR')   # 缺失即报错，列出全部缺项
+    cfg.require('UPLOAD_DIR')   # 登记必填键；缺失由启动体检统一报，不在 import 期抛错
 
 换一个系统时只改 projects/<name>/config.py，内核代码不动。
 """
@@ -23,6 +23,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 # 运行环境名：必须在进程启动前设置（.env 里写 API_ENV 无效，避免鸡生蛋问题）
 ENV = os.getenv('API_ENV', '')
+
+# 已登记但缺失的必填键： 完整键名 -> 环境名
+MISSING_REQUIRED: dict[str, str] = {}
 
 
 def load_dotenv(path: Path | str | None = None):
@@ -53,6 +56,20 @@ def env(key: str, default: str = '', prefix: str | None = None) -> str:
     return os.getenv(full, default)
 
 
+def _env_boolean(key: str) -> bool:
+    return os.getenv(key, '').strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def missing_required() -> dict:
+    """已登记但缺失的必填键快照（键名 → 环境名），供启动体检输出。"""
+    return dict(MISSING_REQUIRED)
+
+
+def clear_missing_required() -> None:
+    """清空登记表（主要给单测用，保证用例之间互不影响）。"""
+    MISSING_REQUIRED.clear()
+
+
 class Settings:
     """一组带统一前缀的环境变量读取器。"""
 
@@ -65,18 +82,26 @@ class Settings:
     def get(self, name: str, default: str = '') -> str:
         return env(name, default, self.prefix)
 
-    def require(self, *names: str) -> None:
-        """启动校验：任一必填键缺失即抛 ValueError，一次性列出全部缺项。
+    def require(self, *names: str) -> list:
+        """登记必填键；缺失时**不立即抛错**，交由启动体检统一报出。
 
-        用于机器相关、没有合理默认值的配置；让配置错误在收集阶段就暴露，
-        而不是跑到一半用错误默认值做出不可信的结果。
+        为什么不在 import 期抛：本方法在 ``projects/<name>/config.py`` 的模块级被调用，
+        一旦抛错，任何 import 该模块的场景（包括 ``--collect-only``）都会直接崩在
+        堆栈里，而且报错形态与「后端没起」完全不一致——同一种「环境没备好」被拆成两套
+        表达。改为「登记 + 体检」，缺配置就和后端不可达一样，走一条可读的 ERROR 消息。
+
+        需要恢复「缺了就立刻炸」的老行为时，设 ``API_CONFIG_STRICT=1``。
+        返回本次缺失的完整键名列表，便于调用方自行处理。
         """
         missing = [self.key(name) for name in names if not self.get(name)]
-        if missing:
+        for key in missing:
+            MISSING_REQUIRED[key] = ENV or 'default'
+        if missing and _env_boolean('API_CONFIG_STRICT'):
             raise ValueError(
                 '缺少必填配置（环境=%s）：%s；请在进程环境变量或 .env%s 中补充'
                 % (ENV or 'default', ', '.join(missing), '.' + ENV if ENV else '')
             )
+        return missing
 
     def integer(self, name: str, default: int = 0) -> int:
         return int(self.get(name, str(default)))

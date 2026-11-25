@@ -382,8 +382,7 @@ shopping 的 `test_update_product_name` 是完整示范，`helpers.py:create_pro
   响应体、失败存档、extract/schema 断言失败消息里的响应体全部覆盖。回归确认：报告
   `password` 键 34 次、`token` 键 26 次，全部为 `******`；已知真实口令 0 泄漏。
 - **多环境**：进程启动前设置 `API_ENV`（如 test/staging）后先加载 `.env.<API_ENV>`（优先）
-  再加载 `.env` 兜底，环境差异只维护差异项；`Settings.require(*names)` 启动校验必填配置，
-  一次性列出全部缺项（shopping 的 `UPLOAD_DIR` 已改为必填）。`.env` 解析改用 `utf-8-sig`，
+  再加载 `.env` 兜底，环境差异只维护差异项；`Settings.require(*names)` 登记必填配置（缺项交给启动体检统一报，见 §19）。`.env` 解析改用 `utf-8-sig`，
   兼容 Windows 记事本/PowerShell 写出的带 BOM 文件（BOM 曾导致首行键名静默失效）。
   `API_ENV` 同时写入报告项目标签与 `run_summary.json`，多环境结果一眼可分。
 - **结果沉淀**：报告按时间戳归档到 `reports/archive/`（保留 `API_REPORT_KEEP` 份，默认 30）；
@@ -637,3 +636,55 @@ shopping 的 `test_update_product_name` 是完整示范，`helpers.py:create_pro
 
 111 → **140 条**（新增覆盖率 29 条：归一化 7 组、清单校验、汇总统计、
 清单外请求、markdown/terminal 渲染、worker 合并、CLI 退出码）。
+
+## 19. 配置校验时机修正：从 import 期改到启动体检（2026-11-25）
+
+### 问题
+
+`Settings.require()` 原本在缺失时**立即抛 `ValueError`**，而它是在
+`projects/<name>/config.py` 的模块级被调用的——等于把「环境没备好」变成了
+「模块导入失败」。后果有三层：
+
+1. `pytest --collect-only` 也崩，而收集用例根本不需要配置；
+2. 报错是一段 `ImportError ... ValueError` 堆栈，和「后端没起」那条漂亮的一行 ERROR 完全不是一个形态；
+3. 同一个问题（环境没备好）被拆成两套表达，README 里也得写两遍。
+
+这就是 CI 第一次失败的真正机制：`cp .env.example .env` 只是补上了缺的文件，
+**没有解决「配置校验发生在错误的时机」**。
+
+### 改法
+
+- `Settings.require()` 改为**登记**缺项（`MISSING_REQUIRED`），返回缺失键列表，不抛错；
+- 启动体检新增第一项 **「必填配置」**，把缺项一次性说清；
+- 需要老行为时设 `API_CONFIG_STRICT=1`，立即在 import 期报错（给「宁可炸在最早一步」的场景）；
+- 顺带修掉一个连带问题：体检中止时**跳过覆盖率统计**，否则会把「环境没备好」写成
+  覆盖率从 43/43 掉到 1/43 的假回归（`preflight.aborted()` 标记）。
+
+### 实测（把 `.env` 临时移走）
+
+| 场景 | 改造前 | 改造后 |
+| --- | --- | --- |
+| `pytest --collect-only` | `ImportError`，退出码 4 | **退出码 0**，正常收集 178 条 |
+| `pytest` | `ImportError` 堆栈 | **退出码 4**，一条 ERROR，用例零执行 |
+| `API_CONFIG_STRICT=1` + 缺配置 | `ValueError` | `ValueError`（行为保持） |
+
+改造后的输出（第一项就是配置）：
+
+```text
+ERROR: 启动体检未通过：5 项检查中 2 项失败、2 项跳过，本次未执行任何用例。
+
+  [FAIL] 必填配置 — 缺少必填配置：SHOPPING_UPLOAD_DIR[default]（请在 .env 或进程环境变量中补充）（0 ms）
+         提示：照 .env.example 补齐缺项；CI 从 .env.example 生成 .env 即为此项服务
+  [FAIL] 后端可达 — 无法连接 http://127.0.0.1:8080：连接被拒绝（服务未启动或端口不对）（2061 ms）
+```
+
+### 顺带修掉一条不稳定用例
+
+验证时串行跑出一次 `XPASS(strict)`：并发支付那条**这一轮没触发竞态**（后端串行化了），
+于是 xfail 变成 XPASS 被 strict 判失败。竞态窗口只有「SELECT 购物车 → INSERT 订单」几毫秒，
+线程启动时间差就能错过。
+
+改法：用 `threading.Barrier` 让三个请求**同时**发出，并跑 **3 轮**——任一轮出现重复订单即判缺陷存在。
+连续 8 次单跑全部稳定 xfailed，全量串行/并行各 2 轮均 173 passed + 5 xfailed。
+
+- 内核单测 140 → **155 条**（新增配置登记语义 12 条、中止标记 3 条）；`ruff check .` 通过。

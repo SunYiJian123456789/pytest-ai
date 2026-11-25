@@ -232,7 +232,7 @@ def render_markdown(report: dict) -> str:
 
 
 def render_terminal(report: dict) -> str:
-    head = '[coverage] 接口覆盖率 %d/%d = %.1f%%' % (
+    head = '[coverage] 本次运行接口覆盖率 %d/%d = %.1f%%' % (
         report['covered'], report['total'], report['ratio'] * 100)
     parts = [head]
     if report['missed']:
