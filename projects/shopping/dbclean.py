@@ -99,3 +99,40 @@ def delete_users(usernames) -> SqlResult:
         return SqlResult(True, [], '')
     return _executor.execute(
         'DELETE FROM sys_user WHERE username IN (%s)' % placeholders, names)
+
+
+# ---------- 兜底扫描（session 收尾用）----------
+
+# 表名/列名只能来自这张白名单，杜绝外部输入拼进 SQL。
+_SCAN_TARGETS = {
+    'users': ('sys_user', 'username'),
+    'products': ('product', 'name'),
+    'categories': ('category', 'name'),
+    'approvals': ('product_approval', 'name'),
+}
+
+
+def scan_test_keys(target: str, prefix: str = 'API') -> list[str]:
+    """按测试专用前缀扫残留标识（只读）；未知 target 直接拒绝。
+
+    demo / admin / reviewer 等账号都不以 API 开头，真实数据不会被扫到。
+    """
+    if target not in _SCAN_TARGETS:
+        raise ValueError('未登记的扫描目标：%s' % target)
+    table, column = _SCAN_TARGETS[target]
+    result = _must(_executor.execute(
+        'SELECT %s AS item_key FROM %s WHERE %s LIKE %%s'
+        % (column, table, column), (prefix + '%',)))
+    return [str(row['item_key']) for row in result.records]
+
+
+def delete_test_keys(target: str, keys) -> SqlResult:
+    """按标识删除残留；target 白名单与 scan_test_keys 共用。"""
+    if target not in _SCAN_TARGETS:
+        raise ValueError('未登记的清理目标：%s' % target)
+    table, column = _SCAN_TARGETS[target]
+    placeholders, items = _in(keys)
+    if not items:
+        return SqlResult(True, [], '')
+    return _executor.execute(
+        'DELETE FROM %s WHERE %s IN (%s)' % (table, column, placeholders), items)

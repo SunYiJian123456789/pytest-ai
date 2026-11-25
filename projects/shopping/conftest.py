@@ -10,7 +10,9 @@ from types import SimpleNamespace
 import pytest
 
 from framework import coverage, defects, hooks
-from framework.cleanup import CleanupRegistry, remove_uploaded_files
+from framework.cleanup import (
+    CleanupRegistry, register_sweep, remove_uploaded_files,
+)
 from framework.client import ApiClient
 from framework.config import missing_required
 from framework.extract import CaseContext, extract
@@ -40,6 +42,30 @@ def pytest_configure(config):
     coverage.configure(Path(__file__).parent / 'data' / 'api_inventory.yaml')
     defects.configure(Path(__file__).parent / 'data' / 'known_defects.yaml',
                       project='shopping')
+    _register_sweeps()
+
+
+def _register_sweeps():
+    """兜底清理：收尾时按 API 前缀扫描残留，补上用例漏登记/中途异常的数据。
+
+    只在主进程执行（见 framework.hooks），且内核对标识再做一次前缀校验；
+    demo/admin 等真实账号不以 API 开头，不会被扫到。DB 不可用时扫描抛错，
+    由内核记一条 FAIL，不影响测试结论但会暴露在报告里。
+    """
+    targets = (
+        ('users', 'API 测试用户'),
+        ('products', 'API 测试商品'),
+        ('categories', 'API 测试分类'),
+        ('approvals', 'API 审批单'),
+    )
+    for target, label in targets:
+        register_sweep(
+            label,
+            discover=lambda target=target: dbclean.scan_test_keys(target),
+            clean=lambda key, target=target: dbclean.delete_test_keys(target, [key]),
+            fallback='按前缀扫描的残留删除失败',
+            prefixes=('API',),
+        )
 
 
 # ---------- 启动体检 ----------

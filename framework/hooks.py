@@ -111,6 +111,12 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     """结果沉淀：本轮结果概要写入 reports/run_summary.json（仅主进程）。"""
     if getattr(config, 'workerinput', None) or config.getoption('collectonly', default=False):
         return
+    # 兜底清理只在主进程跑一次：先合并各 worker 的清理记录，再扫描残留。
+    # 体检中止时用例零执行，此时扫库只会产生误导性 FAIL，直接跳过。
+    from framework.cleanup import run_sweeps
+    from framework.preflight import aborted
+    state.load_workers(ROOT / 'reports')
+    sweep_rows = [] if aborted() else run_sweeps()
     _merge_manifest_shards()
     stats = terminalreporter.stats
     counts = {key: len(stats.get(key) or [])
@@ -125,6 +131,19 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
         'total': sum(counts.values()),
         **counts,
     }
+    # 清理汇总：注册式 / 兜底分开，兜底 > 0 说明有用例漏登记或中途异常
+    registered = [row for row in state.cleanup_log if not row.get('sweep')]
+    summary['cleanup'] = {
+        'registered': len(registered),
+        'sweep': len(sweep_rows),
+        'sweep_failed': sum(1 for row in sweep_rows if row['state'] == 'FAIL'),
+    }
+    if sweep_rows:
+        terminalreporter.write_line('')
+        terminalreporter.write_line(
+            '[cleanup] 兜底清理 %d 项（失败 %d）：注册式清理之外的残留，'
+            '报告里单列统计'
+            % (len(sweep_rows), summary['cleanup']['sweep_failed']))
     # 启动体检结果（哪几项通过/告警、各耗时多少）：环境问题事后可追溯，
     # xdist 下主进程不跑体检，此时为空、不写该键
     preflight = preflight_records()
@@ -159,6 +178,24 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
             json.dumps(summary, ensure_ascii=False, indent=2), encoding='utf-8')
     except OSError:  # 沉淀失败不影响测试结论
         pass
+
+
+def _record_enhance_error(error: str) -> None:
+    """把报告增强失败写进 run_summary，让 CI 能显式检查而不是静默降级。
+
+    pytest_terminal_summary 在 unconfigure 之前执行，summary 已落盘；这里
+    读改写一次，追加 ``report_enhance_error`` 字段。写失败只告警，
+    不再往 REPORT_ENHANCE_ERROR 里追加（避免重复记录）。
+    """
+    target = ROOT / 'reports' / 'run_summary.json'
+    try:
+        payload = json.loads(target.read_text(encoding='utf-8')) if target.exists() else {}
+        payload['report_enhance_error'] = error
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+    except (OSError, ValueError) as exc:  # noqa: BLE001 - 沉淀失败不影响测试结论
+        print('[report-enhancer] 无法写入 run_summary.json：%s' % exc)
 
 
 def _archive_report(target: Path):
@@ -224,8 +261,11 @@ def pytest_unconfigure(config):
         from framework.reporting.enhancer import enhance
         enhance(target, **REPORT_OPTIONS)
     except Exception as exc:  # noqa: BLE001 - 报告美化失败不应影响测试结论
-        REPORT_ENHANCE_ERROR.append(str(exc)[:300])
+        message = str(exc)[:300]
+        REPORT_ENHANCE_ERROR.append(message)
         print('[report-enhancer] 跳过报告增强：%s' % exc)
+        # 不让测试结论变红，但把失败写进 run_summary + CI 门禁，避免静默降级
+        _record_enhance_error(message)
     inject_banner(target, REPORT_ENHANCE_ERROR)
     try:
         _archive_report(target)

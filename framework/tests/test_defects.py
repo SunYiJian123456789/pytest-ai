@@ -273,6 +273,30 @@ class TestCli:
         assert code == 0
         assert '台账与用例一致' in capsys.readouterr().out
 
+    def test_project_derives_ledger_without_business_hardcode(self, tmp_path, monkeypatch, capsys):
+        """内核不认识 shopping：--project 按约定路径推导台账。"""
+        monkeypatch.setattr(defects, 'ROOT', tmp_path)
+        ledger = tmp_path / 'projects' / 'demo' / 'data' / 'known_defects.yaml'
+        ledger.parent.mkdir(parents=True)
+        ledger.write_text(_write_ledger(tmp_path).read_text(encoding='utf-8'), encoding='utf-8')
+        code = defects.main(['--project', 'demo', '--format', 'json'])
+        assert code == 0
+        assert json.loads(capsys.readouterr().out)[0]['id'] == 'DEF-001'
+        assert 'shopping' not in defects.ledger_for_project('demo').as_posix()
+
+    def test_explicit_ledger_wins_over_project(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(defects, 'ROOT', tmp_path)
+        explicit = _write_ledger(tmp_path)
+        code = defects.main(['--ledger', str(explicit), '--project', 'demo',
+                             '--format', 'json'])
+        assert code == 0
+        assert json.loads(capsys.readouterr().out)[0]['id'] == 'DEF-001'
+
+    def test_no_ledger_and_no_project_returns_2(self, capsys):
+        code = defects.main([])
+        assert code == 2
+        assert '请传 --ledger' in capsys.readouterr().out
+
     def test_missing_ledger_returns_2(self, tmp_path, capsys):
         code = defects.main(['--ledger', str(tmp_path / 'none.yaml'), '--check'])
         assert code == 2

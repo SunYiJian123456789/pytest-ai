@@ -830,3 +830,61 @@ CI 在跑用例前用 `--collect-only` 生成清单并做门禁，上述任一�
 | 反向：台账改 fixed 忘删标记 | 抓到 DEF-001，退出码 1；恢复后归零 |
 | 反向：reason 缺编号 | 抓到 DEF-003，退出码 1；恢复后归零 |
 | 全量串行 / `-n 4` | 173 passed + 5 xfailed，双口径覆盖率 43/43；台账摘要进终端与报告，分片无残留 |
+
+---
+
+## 23. 三项可信度补强：报告回归 / 兜底清理 / 内核去业务名（2026-11-25）
+
+### 23.1 报告增强层加回归测试
+
+`framework/reporting/enhancer.py` 靠正则解析 pytest-html 私有的 `data-jsonblob`
+属性并做字符串注入，过去在 `pytest_unconfigure` 里被 `try/except` 吞掉异常：
+插件升级导致结构变化后，报告静默退回原始版本，CI 仍旧全绿。
+
+- **结构契约显式化**：缺 `data-jsonblob`、JSON 坏掉、或缺 `</head>` / `<body>` /
+  `</body>` 任一注入锚点，`enhance()` 直接抛 `ValueError`，不再"找不到就不注入"；
+- **golden HTML 测试**（`framework/tests/test_report_enhancer.py`）：最小报告验证
+  仪表盘/CSS/JS 注入、用例与接口统计、业务 code 与 HTTP 状态分栏、幂等性；
+  结构变更四类场景全部断言抛错；
+- **失败可见**：增强失败除写入报告横幅，还追加到 `run_summary.json` 的
+  `report_enhance_error` 字段；CI 新增 `Verify report enhancement` 步骤显式检查，
+  失败即非 0——测试结论不变红，但"报告没仪表盘"藏不住。
+
+### 23.2 清理兜底 sweep
+
+`Cleaner` 是注册式的：用例中途异常、或新人忘了 `register()`，产生的数据就没人收。
+
+- 内核新增 `register_sweep(name, discover, clean, fallback, prefixes)` 与
+  `run_sweeps()`：业务只回答"扫什么 / 怎么删"，内核负责调度、记录与结果汇总；
+- **前缀二次校验**：`prefixes=('API',)` 由内核在 `clean()` 之前再验一次，
+  `discover` 即使扫宽了也删不到真实数据；
+- **只在主进程跑一次**：xdist 下先合并 worker 记录再扫描，避免并行 worker 互删；
+  启动体检中止（用例零执行）时跳过，防止环境没备好时刷出误导性 FAIL；
+- **报告单列**：清理横幅与 `run_summary.json` 都把"注册式清理"和"兜底清理"
+  分开统计，兜底数 > 0 意味着有用例漏登记，值得单独追查；
+- 业务侧在 `projects/shopping/conftest.py` 注册四类扫描器（用户/商品/分类/审批），
+  底层走 `dbclean.scan_test_keys()` 的白名单只读查询；业务用例文件一行未改。
+
+反向验证：人为插入 `APIUSWEEPX`（测试残留）与 `REALUSERX`（真实账号），
+跑最小用例集后前者被清、后者保留，`cleanup.sweep` 记 1；`-n 4` 下同样只清 1 次。
+
+### 23.3 缺陷台账去除业务名硬编码
+
+`framework/defects.py` 原有 `DEFAULT_LEDGER = 'projects/shopping/data/...'`，
+内核认识具体业务名。改为：
+
+- 删除该常量；CLI 用 `--ledger` 显式传入，或由 `--project <名>` 按约定推导
+  `projects/<项目名>/data/known_defects.yaml`；两者都没传时明确报错（退出码 2）；
+- CI 命令简化为 `--project shopping`，不再写死台账路径；
+- `ledger_for_project()` 单测用临时 ROOT 验证推导与显式参数优先级。
+
+### 实测
+
+| 验证项 | 结果 |
+| --- | --- |
+| `ruff check .` | 通过 |
+| 内核单测 | 230 → **256 条**（报告增强 11、兜底清理 12、台账 CLI 3） |
+| 全量串行 / `-n 4` | 173 passed + 5 xfailed，触达/有效覆盖率均 43/43，台账一致 |
+| 报告门禁 | 正常报告无 `report_enhance_error`，退出码 0；结构变更单测确认抛错并留痕 |
+| 兜底门禁 | 正向 sweep=0；反向残留被清且真实账号保留；并行只清 1 次 |
+| 台账门禁 | `--project shopping --check` 推导路径成功，退出码 0 |

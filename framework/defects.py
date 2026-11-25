@@ -30,13 +30,23 @@ from pathlib import Path
 
 import yaml
 
+from framework.config import ROOT
+
 _ID_PATTERN = re.compile(r'^DEF-\d{3,}$')
 VALID_STATUS = ('open', 'fixed')
 REQUIRED_FIELDS = ('id', 'test', 'status', 'title', 'symptom', 'expected')
 
-# 可由业务 conftest 配置；CLI 通过 --ledger 显式传入，不依赖此值
-DEFAULT_LEDGER = 'projects/shopping/data/known_defects.yaml'
+# 内核不认识任何具体业务项目名：台账路径由 --ledger 显式传入，
+# 或由 --project 按约定推导（见 ledger_for_project）；两者都没有就报错。
 DEFAULT_MANIFEST = 'reports/xfail_manifest.json'
+
+
+def ledger_for_project(project: str) -> Path:
+    """按项目约定推导台账路径：``projects/<项目>/data/known_defects.yaml``。
+
+    这是路径约定，不是业务知识——换系统只需传入不同的项目名。
+    """
+    return ROOT / 'projects' / project / 'data' / 'known_defects.yaml'
 
 
 def configure(path: str | Path | None, *, project: str | None = None) -> None:
@@ -241,7 +251,8 @@ def main(argv=None) -> int:
     import argparse
 
     parser = argparse.ArgumentParser(prog='python -m framework.defects')
-    parser.add_argument('--ledger', default=DEFAULT_LEDGER, help='缺陷台账 YAML 路径')
+    parser.add_argument('--ledger', default=None,
+                        help='缺陷台账 YAML 路径（未传时按 --project 推导）')
     parser.add_argument('--manifest', default=None,
                         help='pytest 收集清单 JSON 路径（默认按 --project 推导）')
     parser.add_argument('--project', default=None,
@@ -252,12 +263,17 @@ def main(argv=None) -> int:
     parser.add_argument('--write', metavar='PATH', default=None,
                         help='把 Markdown 台账写到指定文件（CI 摘要/归档用）')
     args = parser.parse_args(argv)
+    if not args.ledger and not args.project:
+        print('[defects] 请传 --ledger <台账路径> 或 --project <项目名>'
+              '（从 projects/<项目名>/data/known_defects.yaml 推导）')
+        return 2
+    ledger_path = args.ledger or ledger_for_project(args.project)
     manifest_path = args.manifest or (
         'reports/%s_xfail_manifest.json' % args.project
         if args.project else DEFAULT_MANIFEST)
 
     try:
-        ledger = load_ledger(args.ledger)
+        ledger = load_ledger(ledger_path)
     except (OSError, ValueError) as exc:
         print('[defects] 台账读取失败：%s' % exc)
         return 2

@@ -300,14 +300,26 @@ def _dashboard(stats, options):
     )
 
 
+# 注入锚点：pytest-html 结构变化导致任一缺失时，必须显式报错，
+# 不能"找不到就不注入"——那样 CI 全绿、报告却没有仪表盘，属于静默失败。
+_ANCHORS = ('</head>', '<body>', '</body>')
+
+
 def enhance(report_path: Path, **options):
-    """对 pytest-html 报告做后处理；options 由业务项目注入，内核不感知业务。"""
+    """对 pytest-html 报告做后处理；options 由业务项目注入，内核不感知业务。
+
+    结构契约（缺一即抛 ValueError）：``data-jsonblob`` 数据块 + 三个注入锚点。
+    幂等：已注入过 ``id="enh-dashboard"`` 时直接返回。
+    """
     merged = dict(DEFAULT_OPTIONS)
     merged.update({k: v for k, v in options.items() if k in merged})
     source = Path(report_path).read_text(encoding='utf-8')
     if 'id="enh-dashboard"' in source:
         return
-    stats, _ = _collect(source)
+    missing = [anchor for anchor in _ANCHORS if anchor not in source]
+    if missing:
+        raise ValueError('pytest-html 报告结构变化，缺少注入锚点：%s' % ', '.join(missing))
+    stats, _ = _collect(source)  # data-jsonblob 缺失/非法时抛 ValueError
     enhanced = source.replace('</head>', CSS + '</head>', 1)
     enhanced = enhanced.replace('<body>', '<body>' + _dashboard(stats, merged), 1)
     enhanced = enhanced.replace('</body>', JS + '</body>', 1)

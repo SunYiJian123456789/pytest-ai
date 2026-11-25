@@ -66,7 +66,6 @@ jobs:
         run: |
           python -m pytest --collect-only -q >/dev/null
           python -m framework.defects \
-            --ledger projects/shopping/data/known_defects.yaml \
             --project shopping --write reports/known_defects.md --check
           cat reports/known_defects.md >> "$GITHUB_STEP_SUMMARY"
 
@@ -110,6 +109,26 @@ jobs:
             python -m framework.coverage --format terminal --metric "$METRIC" \
               --fail-on-unexpected
           fi
+
+      # 报告增强失败不改写 pytest 退出码（美化不该让业务用例变红），
+      # 但会把错误写进 run_summary.json；这里显式检查，避免"报告没仪表盘却全绿"。
+      - name: Verify report enhancement
+        if: always()
+        shell: bash
+        run: |
+          if [ ! -f reports/run_summary.json ]; then
+            echo "未生成 run_summary.json（用例未运行），跳过"
+            exit 0
+          fi
+          python - <<'PY'
+          import json, sys
+          data = json.load(open('reports/run_summary.json', encoding='utf-8'))
+          error = data.get('report_enhance_error')
+          if error:
+              print('[report-enhancer] 报告增强失败：%s' % error)
+              sys.exit(1)
+          print('[report-enhancer] 报告增强正常')
+          PY
 
       - name: Upload report
         if: always()
