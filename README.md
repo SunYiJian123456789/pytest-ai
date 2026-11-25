@@ -315,11 +315,14 @@ shopping 的 `test_update_product_name` 是完整示范，`helpers.py:create_pro
 - 请求明细：方法徽章、HTTP 状态、业务 code、耗时、左右双栏请求/响应，token 脱敏。
 - 顶部「测试后清理汇总」：成功/跳过/失败分色，真实失败逐条列明；报告增强失败也会醒目提示。
 
-## 7. 兼容层说明
+## 7. 目录约定
 
-根目录 `config.py`、`client.py`、`read_yaml.py`、`dbclean.py`、`helpers.py`、
-`report_enhancer.py`、`report_assets.py` 现在只是 re-export，**旧 import 路径继续可用**。
-新代码建议直接引用 `framework.*` 与 `projects.<项目名>.*`。
+根目录只保留入口与配置（`.env` / `pytest.ini` / `pyproject.toml` / `requirements*.txt`
+/ `run.bat` 等），**不再放 Python 模块**——早期 7 个兼容层薄壳（`config.py` /
+`client.py` / `read_yaml.py` / `dbclean.py` / `helpers.py` / `report_enhancer.py` /
+`report_assets.py`）已确认零引用并删除。所有代码分两层引用：内核走 `framework.*`，
+业务走 `projects.<项目名>.*`，不再有"到底 `from client` 还是 `from framework.client`"
+的歧义。
 
 迁移前的 `testcases/`、`test_data/`、`docs/` 历史副本已清理；`pytest.ini` 的
 `testpaths` 指向 `projects/shopping/testcases`，用例只在业务项目目录维护。
