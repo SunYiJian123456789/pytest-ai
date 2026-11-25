@@ -113,7 +113,8 @@ class TestBuildReport:
         report = coverage.build_report(INVENTORY)
         assert report['covered'] == 0
         assert report['unexpected'] == [
-            {'method': 'GET', 'path': '/api/__not_exists__', 'count': 1, 'statuses': {'404': 1}},
+            {'method': 'GET', 'path': '/api/__not_exists__', 'count': 1,
+             'success': 0, 'statuses': {'404': 1}},
         ]
 
     def test_accepts_tuple_keyed_hits(self):
@@ -128,16 +129,16 @@ class TestRender:
         coverage.record('GET', 'http://h/api/health', 200)
         coverage.record('GET', 'http://h/api/nope', 404)
         text = coverage.render_markdown(coverage.build_report(INVENTORY))
-        assert '1 / 3' in text
+        assert '触达 **1 / 3' in text
         assert '## 公开' in text and '## 用户' in text
-        assert '未覆盖（2）' in text
+        assert '未触达（2）' in text
         assert '清单外请求（1）' in text and '/api/nope' in text
 
     def test_terminal_summary_is_compact(self):
         coverage.record('GET', 'http://h/api/health', 200)
         text = coverage.render_terminal(coverage.build_report(INVENTORY))
         assert text.startswith('[coverage] 本次运行接口覆盖率 1/3 = 33.3%')
-        assert '未覆盖 2 条' in text
+        assert '未触达 2 条' in text
 
 
 class TestXDistsMerge:
@@ -204,3 +205,150 @@ class TestCli:
     def test_markdown_format(self, tmp_path, capsys):
         coverage.main(['--report', self._dump(tmp_path), '--format', 'md'])
         assert '# 接口覆盖率' in capsys.readouterr().out
+
+
+class TestEffectiveCoverage:
+    def test_success_count_tracks_ok_flag(self):
+        coverage.record('GET', 'http://h/api/health', 200, ok=True)
+        coverage.record('GET', 'http://h/api/health', 200, ok=False)
+        coverage.record('GET', 'http://h/api/health', 500, ok=False)
+        hits = coverage.snapshot()
+        assert hits['GET /api/health']['count'] == 3
+        assert hits['GET /api/health']['success'] == 1
+        assert hits['GET /api/health']['statuses'] == {'200': 2, '500': 1}
+
+    def test_default_ok_infers_from_status(self):
+        coverage.record('GET', 'http://h/api/health', 200)   # 无 ok → 2xx 视为有效
+        coverage.record('GET', 'http://h/api/cart', 404)     # 无 ok → 非 2xx 无效
+        report = coverage.build_report(INVENTORY)
+        assert report['effective'] == 1
+        assert report['effective_ratio'] == pytest.approx(0.3333, abs=1e-4)
+
+    def test_touched_but_no_success_is_ineffective(self):
+        coverage.record('GET', 'http://h/api/health', 500, ok=False)
+        report = coverage.build_report(INVENTORY)
+        assert report['covered'] == 1
+        assert report['effective'] == 0
+        assert [row['path'] for row in report['ineffective']] == ['/api/health']
+
+    def test_business_failure_on_200_is_not_effective(self):
+        """HTTP 200 但业务 code≠200 由 result.ok=False 传入，只算触达。"""
+        coverage.record('POST', 'http://h/api/pay', 200, ok=False)
+        hits = coverage.snapshot()
+        assert hits['POST /api/pay']['count'] == 1
+        assert hits['POST /api/pay']['success'] == 0
+
+    def test_report_rows_carry_both_flags(self):
+        coverage.record('GET', 'http://h/api/health', 200, ok=True)
+        report = coverage.build_report(INVENTORY)
+        row = report['rows'][0]
+        assert row['covered'] is True and row['effective'] is True
+        assert row['success'] == 1
+
+    def test_render_shows_both_metrics(self):
+        coverage.record('GET', 'http://h/api/health', 200, ok=True)
+        text = coverage.render_markdown(coverage.build_report(INVENTORY))
+        assert '触达 **1 / 3' in text
+        assert '有效覆盖 1 / 3' in text
+        assert '成功' in text and '有效' in text
+
+    def test_terminal_shows_effective_line(self):
+        coverage.record('GET', 'http://h/api/health', 200, ok=True)
+        text = coverage.render_terminal(coverage.build_report(INVENTORY))
+        assert '其中有效覆盖 1/3 = 33.3%' in text
+
+    def test_merge_infers_success_for_legacy_payload(self):
+        """旧 worker 文件没有 success 字段：按 HTTP 2xx 推断，不判成零有效。"""
+        legacy = {'GET /api/health': {'count': 2, 'statuses': {'200': 1, '500': 1}}}
+        coverage._merge_hits(legacy)
+        assert coverage.snapshot()['GET /api/health']['success'] == 1
+
+
+class TestAllowedUnexpected:
+    def test_known_extra_is_separated_from_violations(self):
+        coverage.record('GET', 'http://h/api/known', 404, ok=False)
+        coverage.record('GET', 'http://h/api/unknown', 404, ok=False)
+        report = coverage.build_report(INVENTORY, allowed_extra={('GET', '/api/known')})
+        assert [row['path'] for row in report['unexpected']] == ['/api/unknown']
+        assert [row['path'] for row in report['known_extra']] == ['/api/known']
+
+    def test_load_allowed_extra_from_inventory(self, tmp_path):
+        path = tmp_path / 'inv.yaml'
+        path.write_text(
+            'version: 1\n'
+            'allowed_unexpected:\n'
+            '  - GET /api/__not_exists__\n'
+            'endpoints:\n'
+            '  - {method: GET, path: /api/health}\n',
+            encoding='utf-8',
+        )
+        assert coverage.load_allowed_extra(path) == {('GET', '/api/__not_exists__')}
+
+    def test_configure_loads_whitelist(self, tmp_path):
+        path = tmp_path / 'inv.yaml'
+        path.write_text(
+            'allowed_unexpected: ["POST /api/x"]\n'
+            'endpoints:\n'
+            '  - {method: GET, path: /api/health}\n',
+            encoding='utf-8',
+        )
+        coverage.configure(path)
+        try:
+            from framework.state import state
+            assert ('POST', '/api/x') in state.coverage_allowed_extra
+        finally:
+            coverage.configure(None)
+
+    def test_bad_whitelist_entry_is_rejected(self, tmp_path):
+        path = tmp_path / 'inv.yaml'
+        path.write_text('allowed_unexpected: ["/no-method"]\nendpoints: []\n', encoding='utf-8')
+        with pytest.raises(ValueError, match='METHOD /path'):
+            coverage.load_allowed_extra(path)
+
+
+class TestCliGate:
+    def _dump(self, tmp_path, *, covered=2, effective=1, total=4, unexpected=None):
+        report = dict(coverage.build_report(INVENTORY), total=total,
+                      covered=covered, ratio=round(covered / total, 4),
+                      effective=effective, effective_ratio=round(effective / total, 4))
+        if unexpected is not None:
+            report['unexpected'] = unexpected
+        path = tmp_path / 'api_coverage.json'
+        path.write_text(json.dumps(report, ensure_ascii=False), encoding='utf-8')
+        return str(path)
+
+    def test_effective_metric_pass(self, tmp_path, capsys):
+        code = coverage.main(['--report', self._dump(tmp_path, effective=3, total=4),
+                              '--metric', 'effective', '--min', '70'])
+        assert code == 0
+        assert '有效覆盖率' in capsys.readouterr().out
+
+    def test_effective_metric_fails(self, tmp_path, capsys):
+        code = coverage.main(['--report', self._dump(tmp_path, effective=1, total=4),
+                              '--metric', 'effective', '--min', '70'])
+        assert code == 1
+        assert '低于阈值' in capsys.readouterr().out
+
+    def test_touched_metric_still_default(self, tmp_path, capsys):
+        code = coverage.main(['--report', self._dump(tmp_path, covered=3, effective=1),
+                              '--min', '70'])
+        assert code == 0
+        assert '触达覆盖率' in capsys.readouterr().out
+
+    def test_fail_on_unexpected(self, tmp_path, capsys):
+        code = coverage.main([
+            '--report', self._dump(tmp_path, unexpected=[
+                {'method': 'GET', 'path': '/api/new', 'count': 1,
+                 'success': 0, 'statuses': {'404': 1}}]),
+            '--fail-on-unexpected',
+        ])
+        assert code == 1
+        assert '清单外请求' in capsys.readouterr().out
+
+    def test_unexpected_allowed_by_default(self, tmp_path):
+        code = coverage.main([
+            '--report', self._dump(tmp_path, unexpected=[
+                {'method': 'GET', 'path': '/api/new', 'count': 1,
+                 'success': 0, 'statuses': {'404': 1}}]),
+        ])
+        assert code == 0

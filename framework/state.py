@@ -78,6 +78,8 @@ class SessionState:
         # —— 标量字段 ——
         self.preflight_aborted: bool = False
         self.coverage_inventory: Path | None = None
+        # 已知清单外请求白名单 {(METHOD, path)}，负向用例故意打的不存在路径登记在这里
+        self.coverage_allowed_extra: set[tuple[str, str]] = set()
 
     # ---------- 重置 ----------
 
@@ -94,6 +96,7 @@ class SessionState:
             self.report_options.update(DEFAULT_REPORT_OPTIONS)
             self.preflight_aborted = False
             self.coverage_inventory = None
+            self.coverage_allowed_extra.clear()
 
     def reset_config(self) -> None:
         with self.lock:
@@ -108,6 +111,7 @@ class SessionState:
         with self.lock:
             self.coverage_hits.clear()
             self.coverage_inventory = None
+            self.coverage_allowed_extra.clear()
 
     def reset_cleanup(self) -> None:
         with self.lock:

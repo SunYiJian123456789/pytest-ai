@@ -10,7 +10,14 @@
 #   group       分组，只影响覆盖率表的分节
 #   name        一句话说明
 #   covered_by  预期覆盖这条接口的用例文件（可多个）
+#
+# allowed_unexpected：已知清单外请求白名单（"METHOD /path"）。
+#   test_01_health 故意请求一个不存在的路径验证 404 兜底，属合法负向调用，
+#   不应被 CI 的「清单外请求」门禁判违规；仍会在报告里单列展示，避免静默漏登记。
 version: 1
+
+allowed_unexpected:
+  - GET /api/__definitely_not_exists__
 
 endpoints:
   # ---------- 用户端：无需登录 ----------

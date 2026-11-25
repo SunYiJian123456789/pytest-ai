@@ -75,22 +75,28 @@ jobs:
         run: python -m pytest -n 4
 
       # 覆盖率由运行期真实请求统计，比对 data/api_inventory.yaml。
-      # 表格同时写进 Actions 运行页摘要；设仓库变量 API_COVERAGE_MIN 才启用门禁。
+      # 双口径：触达（请求过）/ 有效（至少一次成功响应）；CI 门禁按有效口径。
+      # 表格写进 Actions 运行页摘要；清单外请求一律判违规（负向用例路径走白名单）。
+      # API_COVERAGE_MIN 由仓库变量设置；未设置时只出表不卡阈值，但仍检查清单外请求。
       - name: API coverage (inventory vs actual requests)
         if: always()
         shell: bash
         env:
           API_COVERAGE_MIN: ${{ vars.API_COVERAGE_MIN }}
+          API_COVERAGE_METRIC: ${{ vars.API_COVERAGE_METRIC }}
         run: |
           if [ ! -f reports/api_coverage.md ]; then
             echo "未生成覆盖率报告（用例未运行，或项目未配置接口清单）"
             exit 0
           fi
           cat reports/api_coverage.md >> "$GITHUB_STEP_SUMMARY"
+          METRIC="${API_COVERAGE_METRIC:-effective}"
           if [ -n "$API_COVERAGE_MIN" ]; then
-            python -m framework.coverage --format terminal --min "$API_COVERAGE_MIN"
+            python -m framework.coverage --format terminal --metric "$METRIC" \
+              --min "$API_COVERAGE_MIN" --fail-on-unexpected
           else
-            python -m framework.coverage --format terminal
+            python -m framework.coverage --format terminal --metric "$METRIC" \
+              --fail-on-unexpected
           fi
 
       - name: Upload report

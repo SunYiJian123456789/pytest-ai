@@ -737,3 +737,48 @@ ERROR: 启动体检未通过：5 项检查中 2 项失败、2 项跳过，本次
 | 收集阶段 `--collect-only` | 178 条，退出码 0 |
 | 全量串行 | 173 passed + 5 xfailed，覆盖率 43/43 |
 | 全量 `-n 4` | 173 passed + 5 xfailed，覆盖率 43/43，worker 临时文件无残留 |
+
+---
+
+## 21. 覆盖率双口径：触达 vs 有效（2026-11-25）
+
+### 问题
+
+旧覆盖率只要 `ApiClient` 发出请求就算命中——5 条 xfail 的 500、鉴权异常的 401、
+故意打不存在的路径，都和正常成功调用一样计进 43/43。数字漂亮，但
+"接口被测过" 和 "接口的成功路径被验证过" 是两回事。
+
+另有一个反向问题：`test_01_health` 故意请求 `/api/__definitely_not_exists__` 验证
+404 兜底，这类**合法负向调用**若直接纳入"清单外请求门禁"会造成误报。
+
+### 改法
+
+- **双口径**：
+  - 触达（covered）：接口至少被请求过一次（含 4xx/5xx）；
+  - 有效（effective）：接口至少有一次**成功响应**——JSON 响应要求 HTTP 2xx 且业务
+    code 成功（`result.ok`）；静态图片等二进制响应没有业务信封，HTTP 2xx 即有效。
+- **采集层**：`coverage.record(..., ok=...)` 记 `success` 计数；
+  `client.coverage_success()` 统一判定，断言仍用 `result.ok` 不受影响；
+  xdist 合并兼容旧 `success` 缺失的报告（按 HTTP 2xx 推断）。
+- **白名单**：清单顶层 `allowed_unexpected` 登记已知清单外请求（负向用例路径），
+  不计违规但仍在报告单列，避免静默漏登记新接口。
+- **报告**：markdown / 终端同时展示两种覆盖率，新增"仅错误态触达"与
+  "已知清单外请求"两节；`api_coverage.json` 增加 `effective` / `effective_ratio`
+  / `ineffective` / `known_extra` 字段。
+- **CLI 门禁**：`--metric {touched,effective}`（默认 touched，兼容旧脚本）、
+  `--fail-on-unexpected`；CI 默认按 effective + 开启清单外检查，阈值仍由
+  `API_COVERAGE_MIN` 控制（可用 `API_COVERAGE_METRIC` 覆盖口径）。
+
+### 实测
+
+| 验证项 | 结果 |
+| --- | --- |
+| `ruff check .` | 通过 |
+| 内核单测 | 169 → **190 条**（新增双口径 8、白名单 4、CLI 门禁 5、二进制判定 4） |
+| 全量 `-n 4` | 触达 43/43 = 100%，**有效 43/43 = 100%**，173 passed + 5 xfailed |
+| 门禁正向 | `--metric effective --min 90 --fail-on-unexpected` → 退出码 0 |
+| 门禁反向（临时移除白名单） | 抓到 `GET /api/__definitely_not_exists__`，退出码 1；恢复后归零 |
+
+期间发现并修正一个真实误判：静态图片回源返回 HTTP 200 二进制，旧 `result.ok`
+因无业务 code 判 False，一度被标成"仅错误态触达"；改由 `coverage_success()` 特判
+后恢复为有效覆盖。

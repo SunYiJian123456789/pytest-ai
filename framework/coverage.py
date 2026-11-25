@@ -32,8 +32,33 @@ HITS: dict[tuple[str, str], dict] = state.coverage_hits
 
 
 def configure(inventory=None) -> None:
-    """业务 conftest 在 pytest_configure 中调用，指定接口清单路径。"""
+    """业务 conftest 在 pytest_configure 中调用，指定接口清单路径。
+
+    清单顶层的 ``allowed_unexpected`` 列表给出「已知清单外请求」（如负向用例
+    故意打的不存在路径）；这些请求不计入门禁违规，但仍单独展示，避免白名单
+    变成静默吞掉新接口漏登记的黑洞。
+    """
     state.coverage_inventory = Path(inventory) if inventory else None
+    state.coverage_allowed_extra.clear()
+    if state.coverage_inventory is not None:
+        state.coverage_allowed_extra.update(load_allowed_extra(state.coverage_inventory))
+
+
+def load_allowed_extra(path: Path) -> set[str]:
+    """读清单顶层的 allowed_unexpected（'METHOD /path'），格式错误即报错。"""
+    data = yaml.safe_load(Path(path).read_text(encoding='utf-8')) or {}
+    raw = data.get('allowed_unexpected') or []
+    if not isinstance(raw, list):
+        raise ValueError('allowed_unexpected 必须是列表：%s' % path)
+    rows = set()
+    for index, item in enumerate(raw, 1):
+        text = str(item).strip()
+        if ' ' not in text:
+            raise ValueError('allowed_unexpected 第 %d 项格式应为 "METHOD /path"：%r'
+                             % (index, item))
+        method, _, endpoint = text.partition(' ')
+        rows.add((method.upper(), endpoint.strip()))
+    return rows
 
 
 def normalize_path(url_or_path: str) -> str:
@@ -55,12 +80,21 @@ def normalize_path(url_or_path: str) -> str:
     return '/' + '/'.join(normalized)
 
 
-def record(method: str, url: str, status: int = 0) -> None:
-    """记一次真实请求；重复调用只累加计数，不改变键。"""
+def record(method: str, url: str, status: int = 0, *, ok: bool | None = None) -> None:
+    """记一次真实请求；重复调用只累加计数，不改变键。
+
+    :param ok: 本次是否「有效成功」——由 ApiClient 传 ``result.ok``（HTTP 2xx 且
+        业务 code 成功）。缺省时按 HTTP 2xx 推断，兼容不感知业务码的旧调用。
+    """
     key = (method.upper(), normalize_path(url))
+    if ok is None:
+        ok = 200 <= status < 300
     with state.lock:
-        entry = state.coverage_hits.setdefault(key, {'count': 0, 'statuses': {}})
+        entry = state.coverage_hits.setdefault(
+            key, {'count': 0, 'success': 0, 'statuses': {}})
         entry['count'] += 1
+        if ok:
+            entry['success'] = entry.get('success', 0) + 1
         bucket = str(status)
         entry['statuses'][bucket] = entry['statuses'].get(bucket, 0) + 1
 
@@ -83,8 +117,12 @@ def _merge_hits(payload) -> None:
         for key, value in (payload or {}).items():
             method, _, path = key.partition(' ')
             entry = state.coverage_hits.setdefault(
-                (method, path), {'count': 0, 'statuses': {}})
+                (method, path), {'count': 0, 'success': 0, 'statuses': {}})
             entry['count'] += int(value.get('count', 0))
+            # 旧报告没有 success 字段：按 HTTP 状态码推断，不把历史数据判成零有效
+            entry['success'] = entry.get('success', 0) + int(value.get(
+                'success', sum(n for code, n in (value.get('statuses') or {}).items()
+                               if code.isdigit() and 200 <= int(code) < 300)))
             for status, times in (value.get('statuses') or {}).items():
                 entry['statuses'][status] = entry['statuses'].get(status, 0) + int(times)
 
@@ -145,38 +183,60 @@ def _string_keyed(hits) -> dict:
     return result
 
 
-def build_report(inventory: list[dict], hits=None) -> dict:
+def build_report(inventory: list[dict], hits=None, *, allowed_extra=None) -> dict:
+    """比对清单与真实命中，产出**触达 / 有效**双口径报告。
+
+    - 触达（covered）：接口至少被请求过一次，含负向用例的 4xx/5xx；
+    - 有效（effective）：接口至少有一次「成功响应」（``result.ok``：HTTP 2xx
+      且业务 code 成功）。负向用例单独触达的接口不算有效覆盖。
+
+    :param allowed_extra: 已知清单外请求集合 ``{(METHOD, path)}``，不计违规；
+        不传时取 SessionState 中由 ``configure()`` 读入的白名单。
+    """
     hits = _string_keyed(hits)
     declared = {(row['method'], row['path']) for row in inventory}
+    allowed = set(state.coverage_allowed_extra if allowed_extra is None else allowed_extra)
 
     rows = []
     for endpoint in inventory:
         key = '%s %s' % (endpoint['method'], endpoint['path'])
         hit = hits.get(key) or {}
+        success = int(hit.get('success', 0))
         rows.append(dict(endpoint, covered=bool(hit),
                          count=int(hit.get('count', 0)),
+                         success=success,
+                         effective=success > 0,
                          statuses=dict(hit.get('statuses') or {})))
 
-    unexpected = []
+    unexpected, known = [], []
     for key, value in hits.items():
         method, _, path = key.partition(' ')
-        if (method, path) not in declared:
-            unexpected.append({
-                'method': method, 'path': path,
-                'count': int(value.get('count', 0)),
-                'statuses': dict(value.get('statuses') or {}),
-            })
+        if (method, path) in declared:
+            continue
+        entry = {
+            'method': method, 'path': path,
+            'count': int(value.get('count', 0)),
+            'success': int(value.get('success', 0)),
+            'statuses': dict(value.get('statuses') or {}),
+        }
+        (known if (method, path) in allowed else unexpected).append(entry)
     unexpected.sort(key=lambda row: (row['path'], row['method']))
+    known.sort(key=lambda row: (row['path'], row['method']))
 
     covered = sum(1 for row in rows if row['covered'])
+    effective = sum(1 for row in rows if row['effective'])
     total = len(rows)
     return {
         'total': total,
         'covered': covered,
         'ratio': round(covered / total, 4) if total else 0.0,
+        'effective': effective,
+        'effective_ratio': round(effective / total, 4) if total else 0.0,
         'rows': rows,
         'missed': [row for row in rows if not row['covered']],
+        'ineffective': [row for row in rows if row['covered'] and not row['effective']],
         'unexpected': unexpected,
+        'known_extra': known,
     }
 
 
@@ -187,13 +247,20 @@ def _status_text(statuses: dict) -> str:
 
 
 def render_markdown(report: dict) -> str:
+    effective = report.get('effective', 0)
+    total = report['total']
     lines = [
         '# 接口覆盖率',
         '',
-        '本次运行触达 **%d / %d** 个「方法 + 路径」组合，覆盖率 **%.1f%%**。'
-        % (report['covered'], report['total'], report['ratio'] * 100),
+        '本次运行触达 **%d / %d** 个「方法 + 路径」组合（**%.1f%%**）；'
+        '其中**有效覆盖 %d / %d**（**%.1f%%**）。'
+        % (report['covered'], total, report['ratio'] * 100,
+           effective, total, report.get('effective_ratio', 0.0) * 100),
         '',
-        '> 覆盖率由运行期真实请求统计（`ApiClient` 上报），不是按用例文件推断。',
+        '> 触达 = 请求过；有效 = 至少一次成功响应（HTTP 2xx 且业务 code 成功）。'
+        '负向/xfail 用例打出的 4xx/5xx 只算触达，不算有效。',
+        '',
+        '> 数据来自运行期真实请求（`ApiClient` 上报），不是按用例文件推断。',
         '',
     ]
 
@@ -203,24 +270,38 @@ def render_markdown(report: dict) -> str:
 
     for group, rows in groups.items():
         lines += ['## %s' % group, '',
-                  '| 方法 | 路径 | 说明 | 命中 | 状态码 | 覆盖 |',
-                  '| --- | --- | --- | --- | --- | --- |']
+                  '| 方法 | 路径 | 说明 | 命中 | 成功 | 状态码 | 触达 | 有效 |',
+                  '| --- | --- | --- | --- | --- | --- | --- | --- |']
         for row in rows:
-            lines.append('| %s | `%s` | %s | %d | %s | %s |' % (
+            lines.append('| %s | `%s` | %s | %d | %d | %s | %s | %s |' % (
                 row['method'], row['path'], row['name'] or '-', row['count'],
-                _status_text(row['statuses']), '✅' if row['covered'] else '❌',
+                row.get('success', 0), _status_text(row['statuses']),
+                '✅' if row['covered'] else '❌',
+                '✅' if row.get('effective') else '❌',
             ))
         lines.append('')
 
     if report['missed']:
-        lines += ['## 未覆盖（%d）' % len(report['missed']), '']
+        lines += ['## 未触达（%d）' % len(report['missed']), '']
         for row in report['missed']:
             lines.append('- `%s %s` %s' % (row['method'], row['path'], row['name']))
         lines.append('')
 
+    ineffective = report.get('ineffective') or []
+    if ineffective:
+        lines += ['## 仅错误态触达（%d）' % len(ineffective), '',
+                  '> 请求到达了，但没有一次成功响应——可能是负向用例专属接口，'
+                  '也可能是真实缺陷（xfail）。门禁按「有效」口径判定。',
+                  '']
+        for row in ineffective:
+            lines.append('- `%s %s` %s — %s' % (
+                row['method'], row['path'], row['name'], _status_text(row['statuses'])))
+        lines.append('')
+
     if report['unexpected']:
         lines += ['## 清单外请求（%d）' % len(report['unexpected']), '',
-                  '> 调用了但没登记在清单里——新接口忘了登记，或负向用例故意打不存在的路径。',
+                  '> 调用了但没登记在清单里，且不在白名单中——新接口忘了登记，'
+                  '或路径归一化规则失效。CI 门禁会据此失败。',
                   '',
                   '| 方法 | 路径 | 命中 | 状态码 |',
                   '| --- | --- | --- | --- |']
@@ -229,17 +310,37 @@ def render_markdown(report: dict) -> str:
                 row['method'], row['path'], row['count'], _status_text(row['statuses'])))
         lines.append('')
 
+    known = report.get('known_extra') or []
+    if known:
+        lines += ['## 已知清单外请求（%d，白名单）' % len(known), '',
+                  '> 清单顶层 `allowed_unexpected` 登记的合法例外（如负向用例故意打的'
+                  '不存在路径），不计门禁违规，但仍在此展示以免静默漏登记。',
+                  '']
+        for row in known:
+            lines.append('- `%s %s` — %s' % (
+                row['method'], row['path'], _status_text(row['statuses'])))
+        lines.append('')
+
     return '\n'.join(lines)
 
 
 def render_terminal(report: dict) -> str:
     head = '[coverage] 本次运行接口覆盖率 %d/%d = %.1f%%' % (
         report['covered'], report['total'], report['ratio'] * 100)
-    parts = [head]
+    parts = [head,
+             '[coverage]   其中有效覆盖 %d/%d = %.1f%%（至少一次成功响应）'
+             % (report.get('effective', 0), report['total'],
+                report.get('effective_ratio', 0.0) * 100)]
     if report['missed']:
-        parts.append('  未覆盖 %d 条：' % len(report['missed']))
+        parts.append('  未触达 %d 条：' % len(report['missed']))
         parts += ['    - %s %s %s' % (row['method'], row['path'], row['name'])
                   for row in report['missed']]
+    ineffective = report.get('ineffective') or []
+    if ineffective:
+        parts.append('  仅错误态触达 %d 条：' % len(ineffective))
+        parts += ['    - %s %s（%s）' % (row['method'], row['path'],
+                                       _status_text(row['statuses']))
+                  for row in ineffective]
     if report['unexpected']:
         parts.append('  清单外请求 %d 条：' % len(report['unexpected']))
         parts += ['    - %s %s（%s）' % (row['method'], row['path'], _status_text(row['statuses']))
@@ -285,6 +386,10 @@ def main(argv=None) -> int:
                         help='输出格式，默认 markdown（可直接写进 CI 摘要）')
     parser.add_argument('--min', type=float, default=None,
                         help='覆盖率下限（百分比）；低于则返回非 0')
+    parser.add_argument('--metric', choices=['touched', 'effective'], default='touched',
+                        help='门禁口径：touched=触达（默认），effective=至少一次成功响应')
+    parser.add_argument('--fail-on-unexpected', action='store_true',
+                        help='存在非白名单的清单外请求时返回非 0')
     args = parser.parse_args(argv)
 
     path = Path(args.report)
@@ -300,13 +405,30 @@ def main(argv=None) -> int:
     else:
         print(json.dumps(report, ensure_ascii=False, indent=2))
 
+    failed = False
     if args.min is not None:
-        ratio = report['covered'] / report['total'] * 100 if report.get('total') else 0.0
+        total = report.get('total') or 0
+        if args.metric == 'effective':
+            numerator = report.get('effective', 0)
+            label = '有效覆盖率'
+        else:
+            numerator = report.get('covered', 0)
+            label = '触达覆盖率'
+        ratio = numerator / total * 100 if total else 0.0
         if ratio < args.min:
-            print('[coverage] 覆盖率 %.1f%% 低于阈值 %.1f%%' % (ratio, args.min))
-            return 1
-        print('[coverage] 覆盖率 %.1f%% 达标（阈值 %.1f%%）' % (ratio, args.min))
-    return 0
+            print('[coverage] %s %.1f%% 低于阈值 %.1f%%（口径 %s）'
+                  % (label, ratio, args.min, args.metric))
+            failed = True
+        else:
+            print('[coverage] %s %.1f%% 达标（阈值 %.1f%%，口径 %s）'
+                  % (label, ratio, args.min, args.metric))
+    if args.fail_on_unexpected and report.get('unexpected'):
+        print('[coverage] 发现 %d 条非白名单的清单外请求，门禁失败：'
+              % len(report['unexpected']))
+        for row in report['unexpected']:
+            print('    - %s %s' % (row['method'], row['path']))
+        failed = True
+    return 1 if failed else 0
 
 
 if __name__ == '__main__':

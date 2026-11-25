@@ -175,3 +175,39 @@ class TestSensitiveMasking:
         client = ApiClient('http://fake', retry_backoff=0)
         assert 'card_no' in client.sensitive_keys
         assert 'password' not in client.sensitive_keys  # 显式覆盖即完全替换默认清单
+
+
+class TestCoverageSuccess:
+    def test_json_success_is_effective(self):
+        r = result()
+        r.content_type = 'application/json; charset=utf-8'
+        from framework.client import coverage_success
+        assert coverage_success(r) is True
+
+    def test_json_business_failure_is_not_effective(self):
+        r = ApiResult(
+            status=200, code=500, message='boom', data=None, elapsed_ms=1,
+            raw='', url='http://fake/test', envelope=Envelope(),
+            payload={'code': 500, 'message': 'boom'},
+            content_type='application/json',
+        )
+        from framework.client import coverage_success
+        assert coverage_success(r) is False
+
+    def test_binary_200_is_effective(self):
+        r = ApiResult(
+            status=200, code=None, message='', data=b'...', elapsed_ms=1,
+            raw='', url='http://fake/images/a.png', envelope=Envelope(),
+            payload=None, content_type='image/png',
+        )
+        from framework.client import coverage_success
+        assert coverage_success(r) is True
+
+    def test_binary_500_is_not_effective(self):
+        r = ApiResult(
+            status=500, code=None, message='', data=None, elapsed_ms=1,
+            raw='', url='http://fake/images/a.png', envelope=Envelope(),
+            payload=None, content_type='text/html',
+        )
+        from framework.client import coverage_success
+        assert coverage_success(r) is False

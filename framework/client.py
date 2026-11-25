@@ -109,6 +109,17 @@ class ApiResult:
         return 'HTTP %s / code %s / %s' % (self.status, code, self.message or '无消息')
 
 
+def coverage_success(result: 'ApiResult') -> bool:
+    """覆盖率「有效触达」判定：JSON 看业务信封，非 JSON 看 HTTP 2xx。
+
+    与 ``result.ok`` 的区别只在一处：静态图片等二进制响应没有 ``{code,...}``
+    信封，``result.ok`` 会因 code 缺失判 False，但那是一次成功的回源，
+    应计入有效覆盖。断言仍用 ``result.ok``，不受影响。
+    """
+    is_json = 'application/json' in result.content_type or isinstance(result.payload, dict)
+    return result.ok if is_json else 200 <= result.status < 300
+
+
 def mask_token(token: Optional[str]) -> str:
     if not token:
         return '-'
@@ -314,7 +325,12 @@ class ApiClient:
         # 惰性导入：framework/__init__ 会导入本模块，若这里顶层导入 coverage，
         # `python -m framework.coverage` 启动时会命中「module already in sys.modules」告警。
         from framework import coverage as _coverage
-        _coverage.record(method, result.url or url, result.status)
+        # ok 让覆盖率区分「触达」与「有效触达」：
+        # - JSON 信封：HTTP 2xx 且业务 code 成功才算有效，负向/xfail 只算触达；
+        # - 非 JSON（静态图片等二进制）：没有业务信封，HTTP 2xx 即有效，
+        #   否则图片回源这种正常 200 会被误判成「仅错误态触达」。
+        _coverage.record(method, result.url or url, result.status,
+                         ok=coverage_success(result))
         self._attach(method, path, req_headers, json_body, params, result)
         return result
 
