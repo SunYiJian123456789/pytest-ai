@@ -2,8 +2,9 @@
 """shopping 项目的业务配置（换系统时只改这一层）。
 
 所有键都通过 framework.Settings('SHOPPING_') 读取，环境变量优先级高于 .env。
-机器相关、无合理默认值的键（如 UPLOAD_DIR）用 CFG.require() 启动校验，
-缺失即报错并列出全部缺项，绝不静默落到错误默认值。
+机器相关、无合理默认值的键（如 UPLOAD_DIR）用 CFG.require() 登记，
+缺失项由启动体检统一汇总报出（不在 import 期抛错，故 --collect-only 不受影响），
+绝不静默落到错误默认值。
 """
 import os
 
