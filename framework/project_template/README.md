@@ -51,8 +51,9 @@ python -m pytest -o testpaths=projects/order_system/testcases
 | `config.py` | 被测地址、超时、鉴权、成功码、报告展示信息 |
 | `conftest.py` | **五套机制的接入口**（体检 / 配置登记 / 台账 / 清理 / 身份隔离） |
 | `helpers.py` | 项目级小工具，如唯一串 `uid()` |
-| `data/api_cases.yaml` | 静态用例数据集（路径、非法值、权限矩阵、响应契约） |
+| `data/api_cases.yaml` | 静态用例数据集（路径、非法值、权限矩阵） |
 | `data/api_inventory.yaml` | 接口清单（method + path），覆盖率门禁的基准 |
+| `data/contracts.yaml` | 响应契约（method + path + JSON Schema），消费方校验与提供方门禁共用 |
 | `data/scenarios.yaml` | 线性正向链路场景（YAML 编排） |
 | `data/known_defects.yaml` | 已知缺陷台账，空台账 `defects: []` |
 | `testcases/test_01_smoke.py` | 冒烟 + 数据驱动范式示例 |
@@ -74,9 +75,10 @@ python -m pytest -o testpaths=projects/order_system/testcases
 2. **`config.py`**：改 `SUCCESS_CODE`、`MODULE_LABELS`、`REPORT_NOTES`；鉴权由 `AuthSpec` 通配，
    一般只配环境变量即可，不必改代码。
 3. **`data/api_inventory.yaml`**：把被测接口按 `method + path` 登记进去，覆盖率门禁才有基准。
-4. **`data/api_cases.yaml`**：按真实场景增删数据集（见 §6）。
-5. **`conftest.py`**：多角色项目按 §5.5 拆登录；有可扫存储时按 §5.4 注册兜底清理。
-6. **`testcases/`**：把示例断言换成真实业务用例，或直接新增文件（约定 `test_` 前缀即可被收集）。
+4. **`data/contracts.yaml`**：按真实响应结构改契约；不需要契约校验的项目可删掉该文件与 `test_03_contract.py`。
+5. **`data/api_cases.yaml`**：按真实场景增删数据集（见 §6）。
+6. **`conftest.py`**：多角色项目按 §5.5 拆登录；有可扫存储时按 §5.4 注册兜底清理。
+7. **`testcases/`**：把示例断言换成真实业务用例，或直接新增文件（约定 `test_` 前缀即可被收集）。
 
 ## 5. conftest 的五套机制（重点）
 
@@ -156,7 +158,8 @@ python -m pytest -o testpaths=projects/order_system/testcases
 
 | 范式 | 什么时候用 | 落点 |
 | --- | --- | --- |
-| 数据驱动 | 一批同构输入（路径、非法值、权限、契约） | `data/api_cases.yaml` + `@pytest.mark.parametrize` |
+| 数据驱动 | 一批同构输入（路径、非法值、权限） | `data/api_cases.yaml` + `@pytest.mark.parametrize` |
+| 契约校验 | 响应结构约定（服务方与消费方共用） | `data/contracts.yaml` + `test_03` 通用入口 |
 | YAML 场景 | **线性正向链路**（无分支、无落库断言、单身份） | `data/scenarios.yaml` + `test_04` 通用入口 |
 | Python 强断言 | 负向面、落库核对、软断言、多身份、条件分支 | 自己写 `test_*.py` |
 
@@ -168,7 +171,9 @@ python -m pytest -o testpaths=projects/order_system/testcases
 - `smoke_paths` → `test_01` 的路径探活
 - `invalid_ids` → 非法 ID 参数化
 - `permission_matrix` → `test_02` 的角色 × 接口 × 期望结果（角色取自 `role_tokens`）
-- `response_schemas` + `response_schemas_cases` → `test_03` 的 JSON Schema 契约校验
+
+契约单独放 `data/contracts.yaml`，由 `test_03` 按契约名校验响应。
+契约变更的兼容性门禁见 §9；ci 用上一版契约作基线，删字段/改类型会直接失败。
 
 多字段校验用软断言，一次报全，别让第一个字段失败挡住后面的信息：
 
@@ -222,11 +227,17 @@ python -m pytest framework/tests -q
 # 2. 覆盖率（effective 口径，出现清单外请求即失败；阈值按需加 --min 80）
 python -m framework.coverage --format terminal --metric effective --fail-on-unexpected
 
-# 3. 缺陷台账（先生成收集清单，再校验一致性）
+# 3. 契约双向校验（消费方在 test_03 校验响应；这里做提供方门禁）
+python -m framework.contract validate --file projects/order_system/data/contracts.yaml
+git show 'HEAD^:projects/order_system/data/contracts.yaml' > /tmp/baseline.yaml
+python -m framework.contract check \
+  --current projects/order_system/data/contracts.yaml --baseline /tmp/baseline.yaml
+
+# 4. 缺陷台账（先生成收集清单，再校验一致性）
 python -m pytest --collect-only -q > /dev/null
 python -m framework.defects --project order_system --check
 
-# 4. 报告增强校验
+# 5. 报告增强校验
 #    检查 reports/run_summary.json 不含 report_enhance_error
 ```
 

@@ -58,6 +58,23 @@ jobs:
         shell: bash
         run: python -m pytest framework/tests -o addopts= -q
 
+      # 契约双向校验：消费方在 test_14_contract.py 按契约校验真实响应；
+      # 这里做提供方门禁——与上一版（HEAD^）契约对比，删字段/改类型/加必填/收紧约束直接失败。
+      # 新增可选字段、放宽约束放行；首次提交无基线时只做格式自检。
+      - name: Contract compatibility (producer gate)
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m framework.contract validate --file projects/shopping/data/contracts.yaml
+          if git cat-file -e 'HEAD^:projects/shopping/data/contracts.yaml' 2>/dev/null; then
+            git show 'HEAD^:projects/shopping/data/contracts.yaml' > /tmp/contract_baseline.yaml
+            python -m framework.contract check \
+              --current projects/shopping/data/contracts.yaml \
+              --baseline /tmp/contract_baseline.yaml | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "首次提交契约（HEAD^ 无基线），跳过兼容性对比"
+          fi
+
       # xfail 台账门禁：收集阶段即可校验，不必等用例执行。
       # 「修好后端忘删 xfail」→ 台账 fixed 但标记还在；「删了标记忘改台账」→ 反向报错；
       # reason 不带缺陷号 → XPASS 时无法反查，同样判失败。

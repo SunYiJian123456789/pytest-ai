@@ -18,18 +18,3 @@ permission_matrix:
     path: /api/health
     expect_http: 200
     expect_code: 200
-
-# 响应契约：JSON Schema Draft 7，新增一个 key 即新增一条契约用例。
-# 结构不符时报告会指出具体字段路径与完整响应体。
-response_schemas:
-  health:
-    type: object
-    required: [code, data]
-    properties:
-      code: {type: integer}
-      data: {type: object}
-
-# 契约用例场景：name 对应上面的 response_schemas key
-response_schemas_cases:
-  - name: health
-    path: /api/health

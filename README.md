@@ -929,3 +929,62 @@ CI 在跑用例前用 `--collect-only` 生成清单并做门禁，上述任一�
 
 结论：本轮**不改引擎行为、不迁移任何业务用例**，只把定位说清楚。引擎行为由
 `framework/tests/test_scenario.py` 16 条单测继续保障，两条示范场景保持原样。
+
+## 25. 契约外置与双向校验（2026-11-26）
+
+契约此前写在 `api_cases.yaml` 的 `response_schemas` 段里，只有消费方自己看得见：
+服务方改了字段，消费方只知道「测试红了」，不知道是否违反约定。现在契约独立成
+`projects/shopping/data/contracts.yaml`，成为双方共用的可评审资产。
+
+### 契约格式
+
+```yaml
+version: 1
+project: shopping
+contracts:
+  health:
+    method: GET              # 接口标识，便于服务方定位
+    path: /api/health
+    token: null              # 仅说明需要哪种角色，不参与校验
+    response:                # JSON Schema Draft 7，校验整个响应体
+      type: object
+      required: [code, data]
+      properties:
+        code: {type: integer}
+        data: {type: object}
+```
+
+加载时自检：version 必须为 1、contracts 非空、每条有 method/path/response、
+schema 必须是合法 Draft 7——错误直接报出契约名与字段，不会静默跳过。
+
+### 两个方向
+
+| 方向 | 实现 | 时机 |
+| --- | --- | --- |
+| 消费方校验 | `test_14_contract.py` 用 `assert_contract` 按契约校验真实响应；另有测试校验契约 method/path 已在接口清单登记 | 每次跑 pytest |
+| 提供方门禁 | `framework.contract check` 对比 `HEAD^` 基线，破坏性变更返回 1 | CI `Contract compatibility` 步骤 |
+
+### 破坏性变更判定
+
+| 拦截 | 放行 |
+| --- | --- |
+| 删除字段、删除数组元素约束、删除整条契约 | 新增可选字段、新增契约 |
+| 类型改变 | 移除必填约束 |
+| 新增必填字段（required 增加） | minimum 变小 / maximum 变大等放宽 |
+| minimum/minLength/minItems 变大、maximum/maxLength/maxItems 变小 | enum 扩大 |
+| const 改变、enum 缩小、新增/改变 pattern | — |
+| 新增 `additionalProperties: false` | — |
+
+### 命令
+
+```bash
+python -m framework.contract validate --file projects/shopping/data/contracts.yaml
+python -m framework.contract check \
+  --current projects/shopping/data/contracts.yaml \
+  --baseline /tmp/baseline.yaml       # 0=兼容，1=破坏性变更，2=文件错误
+```
+
+反向验证过：删除 `health.data.database` 字段后门禁输出
+`契约 health.response.data: 删除字段 database` 并返回 1。
+
+脚手架模板已同步 `data/contracts.yaml.tpl`，新项目生成后即带契约样例。
