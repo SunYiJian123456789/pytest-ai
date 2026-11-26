@@ -29,6 +29,11 @@ jobs:
       # A: self-hosted runner 上 PATH 里的 python 可能指向 WorkBuddy 内置解释器（缺依赖），
       #    统一显式指向已装好锁定版本依赖的 CPython 3.12。
       PYTHON: D:/python/python.exe
+      # C: runner 从宿主继承的 PYTHONPATH 可能指向 WorkBuddy 的 safe-delete shim
+      #    (sitecustomize.py)。它 hook 了 shutil.rmtree，pytest 结束清理临时目录时
+      #    会触发批量删除保护，导致进程以退出码 1 结束——即便用例全部通过（run #6/#7 即此因）。
+      #    显式清空以隔离宿主环境，让 pytest 使用原生删除。
+      PYTHONPATH: ''
 
     steps:
       - uses: actions/checkout@v4
