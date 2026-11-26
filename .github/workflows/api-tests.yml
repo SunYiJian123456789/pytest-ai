@@ -26,6 +26,9 @@ jobs:
     runs-on: self-hosted
     env:
       SHOPPING_DB_STRICT: '1'
+      # A: self-hosted runner 上 PATH 里的 python 可能指向 WorkBuddy 内置解释器（缺依赖），
+      #    统一显式指向已装好锁定版本依赖的 CPython 3.12。
+      PYTHON: D:/python/python.exe
 
     steps:
       - uses: actions/checkout@v4
@@ -35,6 +38,7 @@ jobs:
       - name: Prepare .env from example
         shell: bash
         run: |
+          set -euo pipefail
           if [ -f .env ]; then
             echo "已存在 .env，跳过生成"
           else
@@ -45,18 +49,24 @@ jobs:
       - name: Verify prerequisites
         shell: bash
         run: |
-          python -m pip install -r requirements.txt -r requirements-dev.txt
+          # B: 严格失败——依赖安装失败必须让本步骤红，不能被后续成功的 curl 掩盖
+          set -euo pipefail
+          "$PYTHON" -m pip install -r requirements.txt -r requirements-dev.txt
           curl -sf http://127.0.0.1:8080/api/health || {
             echo "后端未启动：请先运行 D:/shopping/start-backend.bat"; exit 1;
           }
 
       - name: Lint (ruff)
         shell: bash
-        run: python -m ruff check .
+        run: |
+          set -euo pipefail
+          "$PYTHON" -m ruff check .
 
       - name: Framework unit tests (no backend needed)
         shell: bash
-        run: python -m pytest framework/tests -o addopts= -q
+        run: |
+          set -euo pipefail
+          "$PYTHON" -m pytest framework/tests -o addopts= -q
 
       # 契约双向校验：消费方在 test_14_contract.py 按契约校验真实响应；
       # 这里做提供方门禁——与上一版（HEAD^）契约对比，删字段/改类型/加必填/收紧约束直接失败。
@@ -64,11 +74,11 @@ jobs:
       - name: Contract compatibility (producer gate)
         shell: bash
         run: |
-          set -o pipefail
-          python -m framework.contract validate --file projects/shopping/data/contracts.yaml
+          set -euo pipefail
+          "$PYTHON" -m framework.contract validate --file projects/shopping/data/contracts.yaml
           if git cat-file -e 'HEAD^:projects/shopping/data/contracts.yaml' 2>/dev/null; then
             git show 'HEAD^:projects/shopping/data/contracts.yaml' > /tmp/contract_baseline.yaml
-            python -m framework.contract check \
+            "$PYTHON" -m framework.contract check \
               --current projects/shopping/data/contracts.yaml \
               --baseline /tmp/contract_baseline.yaml | tee -a "$GITHUB_STEP_SUMMARY"
           else
@@ -81,8 +91,9 @@ jobs:
       - name: Known defects ledger (xfail vs ledger)
         shell: bash
         run: |
-          python -m pytest --collect-only -q >/dev/null
-          python -m framework.defects \
+          set -euo pipefail
+          "$PYTHON" -m pytest --collect-only -q >/dev/null
+          "$PYTHON" -m framework.defects \
             --project shopping --write reports/known_defects.md --check
           cat reports/known_defects.md >> "$GITHUB_STEP_SUMMARY"
 
@@ -93,14 +104,18 @@ jobs:
           github.event_name == 'pull_request' ||
           (github.event_name == 'workflow_dispatch' && inputs.suite == 'smoke')
         shell: bash
-        run: python -m pytest -m smoke -n 4
+        run: |
+          set -euo pipefail
+          "$PYTHON" -m pytest -m smoke -n 4
 
       - name: Run full suite (schedule / manual full)
         if: >-
           github.event_name == 'schedule' ||
           (github.event_name == 'workflow_dispatch' && inputs.suite == 'full')
         shell: bash
-        run: python -m pytest -n 4
+        run: |
+          set -euo pipefail
+          "$PYTHON" -m pytest -n 4
 
       # 覆盖率由运行期真实请求统计，比对 data/api_inventory.yaml。
       # 双口径：触达（请求过）/ 有效（至少一次成功响应）；CI 门禁按有效口径。
@@ -113,6 +128,7 @@ jobs:
           API_COVERAGE_MIN: ${{ vars.API_COVERAGE_MIN }}
           API_COVERAGE_METRIC: ${{ vars.API_COVERAGE_METRIC }}
         run: |
+          set -euo pipefail
           if [ ! -f reports/api_coverage.md ]; then
             echo "未生成覆盖率报告（用例未运行，或项目未配置接口清单）"
             exit 0
@@ -120,10 +136,10 @@ jobs:
           cat reports/api_coverage.md >> "$GITHUB_STEP_SUMMARY"
           METRIC="${API_COVERAGE_METRIC:-effective}"
           if [ -n "$API_COVERAGE_MIN" ]; then
-            python -m framework.coverage --format terminal --metric "$METRIC" \
+            "$PYTHON" -m framework.coverage --format terminal --metric "$METRIC" \
               --min "$API_COVERAGE_MIN" --fail-on-unexpected
           else
-            python -m framework.coverage --format terminal --metric "$METRIC" \
+            "$PYTHON" -m framework.coverage --format terminal --metric "$METRIC" \
               --fail-on-unexpected
           fi
 
@@ -133,11 +149,12 @@ jobs:
         if: always()
         shell: bash
         run: |
+          set -euo pipefail
           if [ ! -f reports/run_summary.json ]; then
             echo "未生成 run_summary.json（用例未运行），跳过"
             exit 0
           fi
-          python - <<'PY'
+          "$PYTHON" - <<'PY'
           import json, sys
           data = json.load(open('reports/run_summary.json', encoding='utf-8'))
           error = data.get('report_enhance_error')
