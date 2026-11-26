@@ -12,6 +12,7 @@ import html
 import json
 import re
 import time
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
@@ -29,6 +30,15 @@ SLOW_MS = 1000
 # 仅对幂等方法重试；业务失败被包成 HTTP 200 + code≠200 时不重试（负向用例需原样返回）
 RETRYABLE_METHODS = frozenset({'GET', 'HEAD', 'OPTIONS', 'PUT', 'DELETE'})
 DEFAULT_RETRY_STATUSES = (429, 500, 502, 503, 504)
+
+# 身份串号守护：同一客户端换 token 却没清 Cookie 时告警/失败。
+# off=不检查 / warn=发 UserWarning（默认）/ strict=抛 IdentityConflictError。
+COOKIE_GUARD_OFF, COOKIE_GUARD_WARN, COOKIE_GUARD_STRICT = 'off', 'warn', 'strict'
+COOKIE_GUARD_MODES = (COOKIE_GUARD_OFF, COOKIE_GUARD_WARN, COOKIE_GUARD_STRICT)
+
+
+class IdentityConflictError(RuntimeError):
+    """同一客户端切换身份但会话残留 Cookie，可能触发 Cookie 优先的静默串号。"""
 
 
 @dataclass
@@ -166,7 +176,8 @@ class ApiClient:
                  retry_backoff: float | None = None,
                  retry_statuses: Sequence[int] | None = None,
                  trace_enabled: bool | None = None,
-                 trace_header: str | None = None):
+                 trace_header: str | None = None,
+                 cookie_guard: str | None = None):
         if not base_url:
             base_url = env('API_BASE_URL', 'http://127.0.0.1:8080')
         self.base_url = base_url.rstrip('/')
@@ -209,9 +220,22 @@ class ApiClient:
             key.strip().lower() for key in sensitive.split(',') if key.strip()
         )
 
+        # 身份串号守护：默认 warn，只告警不改行为；CI 可设 strict 变成硬失败。
+        mode = cookie_guard if cookie_guard is not None else env('API_COOKIE_GUARD', 'warn')
+        mode = (mode or 'off').strip().lower()
+        if mode not in COOKIE_GUARD_MODES:
+            raise ValueError('API_COOKIE_GUARD 只能是 %s，收到 %r' % (', '.join(COOKIE_GUARD_MODES), mode))
+        self.cookie_guard = mode
+
         self.session = requests.Session()
         self.extras = None  # 由 conftest 绑定 pytest-html 的 extras fixture
         self.last_login: Optional[ApiResult] = None  # 最近一次登录响应，供取用户信息
+        # 上次请求实际发出的身份 token；用于检测「换 token 但没清 Cookie」。
+        # 构造时给了 default_token 即已确立身份，从这里开始追踪，避免首次
+        # 显式切 token 绕过守护。
+        self._last_token: Optional[str] = default_token
+        # 最近一次登录写入的 token：登录产生的 Cookie 归属它，切换需特别警惕。
+        self._login_token: Optional[str] = None
 
     def clear_cookies(self) -> 'ApiClient':
         """清空本会话累积的 Cookie。
@@ -224,9 +248,52 @@ class ApiClient:
 
         多身份场景（越权 / 会话隔离）应各用独立 ApiClient；确实要复用同一
         客户端时，切换身份前先调用本方法。
+
+        本方法会一并重置身份追踪，因此清理后切换身份不会被守护误报。
         """
         self.session.cookies.clear()
+        self._last_token = None
+        self._login_token = None
         return self
+
+    def _guard_identity(self, token: Optional[str], explicit: bool,
+                        previous: Optional[str] = None) -> None:
+        """检测「同一客户端换身份但 Cookie 未清」的串号高危条件。
+
+        只在同时满足以下条件时触发，避免误伤正常的单次登录流程：
+        1. 本次请求实际带上了身份 token（显式或 default_token）；
+        2. 会话里存在 Cookie（后端可能 Cookie 优先）；
+        3. 本次 token 与此前记录的身份不同（发生了身份切换）。
+
+        ``off`` 静默；``warn`` 发 ``UserWarning``；``strict`` 抛
+        ``IdentityConflictError``，把静默假绿变成显式失败。
+        """
+        if self.cookie_guard == COOKIE_GUARD_OFF or token is None:
+            return
+        if previous is None:
+            previous = self._last_token
+        # 首次带 token（含注册后第一次用返回的 token）不算切换；
+        # 同一 token 重复请求也不算。
+        if previous is None or previous == token:
+            return
+        if not self.session.cookies:
+            return
+        # 显式传 token 才是「主动切换到另一个身份」的意图；default_token 被
+        # login() 改写时由 login 自己调用 clear 语义，不在此重复告警。
+        if not explicit:
+            return
+        def masked(t):
+            return '%s…%s' % (str(t)[:4], str(t)[-4:]) if t and len(str(t)) > 8 else (t or '<匿名>')
+
+        message = (
+            '身份串号风险：同一 ApiClient 上从 %s 切换到 %s，但会话仍带着 Cookie。'
+            '若后端 Cookie 优先于 Authorization 头，服务端会按旧身份处理，用例可能假绿。'
+            '请改用 new_client() 各开独立客户端，或切换前调用 clear_cookies()。'
+            '（可用 API_COOKIE_GUARD=off 关闭本检查）'
+        ) % (masked(previous), masked(token))
+        if self.cookie_guard == COOKIE_GUARD_STRICT:
+            raise IdentityConflictError(message)
+        warnings.warn(message, UserWarning, stacklevel=3)
 
     # ---------- 请求 ----------
 
@@ -243,6 +310,9 @@ class ApiClient:
             req_headers[self.trace_header] = trace_id
         explicit = token is not None
         actual_token = token if explicit else self.default_token
+        # 身份串号守护：在真正发出请求前检测，越权/多身份用例的假绿在此拦截
+        self._guard_identity(actual_token, explicit)
+        self._last_token = actual_token
         # 显式 token 始终生效；cookie/none 模式下不主动注入请求头
         if actual_token and (explicit or self.auth is None or self.auth.uses_header()):
             value = (self.auth_scheme + ' ' + actual_token).strip() if self.auth_scheme else actual_token
@@ -348,6 +418,11 @@ class ApiClient:
             raise AssertionError('登录失败：%s；%s' % (result.describe(), result.url))
         self.last_login = result
         token = self.auth.token_from(result.payload)
+        # 二次登录检测：同一客户端已登录过身份 A，又登录身份 B 时，
+        # Cookie 会残留 A，是本坑最常见的触发点。此时新 token 才算「切换身份」。
+        if self._login_token is not None and token is not None:
+            self._guard_identity(token=token, explicit=True, previous=self._login_token)
+        self._login_token = token
         if self.auth.mode == 'auto':
             self.auth.mode = (
                 'header' if token else

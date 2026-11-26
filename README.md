@@ -136,7 +136,10 @@ shopping 用户端只有购物车项带客户端可控 id（后端 SQL 层写死
 
 **多身份注意**：`requests.Session` 会累积 `Set-Cookie`，而 shopping 后端 Cookie 优先于
 `Authorization` 头（`CookieUtil.token`），同一个 `ApiClient` 先后注册两个用户会静默串号。
-多身份用例用 `new_client` fixture 各开一个客户端；复用同一客户端时先 `clear_cookies()`。
+四层防护：① 多身份用例用 `new_client` fixture 各开一个客户端（首选）；② 复用同一客户端
+切换前 `clear_cookies()`；③ 内核 `API_COOKIE_GUARD`（默认 `warn`，CI 可设 `strict` 硬失败）
+自动检测「换 token 但 Cookie 未清」；④ 鉴权负向用例也用 `new_client` 起干净会话。
+详见 `docs/Cookie 优先后端的身份串号防护方案.md`。
 
 ### 鉴权通配（AuthSpec）
 
@@ -151,6 +154,7 @@ shopping 用户端只有购物车项带客户端可控 id（后端 SQL 层写死
 | `<前缀>AUTH_TOKEN_FIELD` / `AUTH_TOKEN_PATH` | `token` / 空 | token 位置，支持 `data.access_token` 嵌套路径 |
 | `<前缀>AUTH_HEADER` / `AUTH_SCHEME` | `Authorization` / `Bearer` | 请求头名与前缀；scheme 留空则原样发送 |
 | `<前缀>AUTH_COOKIE_NAME` | 空 | Cookie 模式下关心的 cookie 名 |
+| `API_COOKIE_GUARD`（全局，无前缀） | `warn` | 身份串号守护：`off` / `warn` / `strict`（CI 建议 `strict`） |
 
 `auto` 模式登录后自动探测：能提取到 token 就走 header，否则有 Cookie 就走 cookie。
 显式传 `token=` 的调用始终优先注入请求头，因此 shopping 现有 178 条业务用例无需改动。

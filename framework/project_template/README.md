@@ -154,6 +154,12 @@ python -m pytest -o testpaths=projects/order_system/testcases
 `_TOKENS` 用 `state.namespace('<项目名>.tokens')` 隔离，体检登录与 fixture 共用一次登录，
 不重复请求。
 
+框架还有自动守护：内核在每次请求前检测「换 token 但 Cookie 未清」，由环境变量
+`API_COOKIE_GUARD` 控制，默认 `warn`（发告警不中断），CI 建议设 `strict`（直接失败）。
+鉴权负向用例（坏 token / 缺 token）也要用 `new_client()` 起干净会话——否则服务端按
+Cookie 认成合法用户，401 用例会假绿。完整方案见
+`docs/Cookie 优先后端的身份串号防护方案.md`。
+
 ## 6. 写用例的三种范式
 
 | 范式 | 什么时候用 | 落点 |
