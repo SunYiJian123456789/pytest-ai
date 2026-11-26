@@ -21,11 +21,10 @@ import requests
 from pytest_html import extras as html_extras
 
 from framework.auth import AuthSpec
-from framework.config import ROOT, env
+from framework.config import env, reports_dir as default_reports_dir
 
 # 慢请求阈值（毫秒）：超过则在报告明细中高亮
 SLOW_MS = 1000
-DEFAULT_REPORTS_DIR = ROOT / 'reports'
 
 # 仅对幂等方法重试；业务失败被包成 HTTP 200 + code≠200 时不重试（负向用例需原样返回）
 RETRYABLE_METHODS = frozenset({'GET', 'HEAD', 'OPTIONS', 'PUT', 'DELETE'})
@@ -179,7 +178,7 @@ class ApiClient:
             auth_header, auth_scheme = auth.header, auth.scheme
         self.auth_header = auth_header
         self.auth_scheme = auth_scheme
-        self.reports_dir = Path(reports_dir) if reports_dir else DEFAULT_REPORTS_DIR
+        self.reports_dir = (Path(reports_dir) if reports_dir else default_reports_dir())
         self.slow_ms = slow_ms
         self.archive_failures = archive_failures
 

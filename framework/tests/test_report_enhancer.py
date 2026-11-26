@@ -110,7 +110,7 @@ class TestStructureChangesFailLoudly:
 
 class TestEnhanceFailureVisible:
     def test_record_error_writes_run_summary(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(hooks, 'ROOT', tmp_path)
+        monkeypatch.setattr(hooks, 'reports_dir', lambda: tmp_path / 'reports')
         (tmp_path / 'reports').mkdir()
         summary = tmp_path / 'reports' / 'run_summary.json'
         summary.write_text(json.dumps({'passed': 1}), encoding='utf-8')
@@ -120,7 +120,7 @@ class TestEnhanceFailureVisible:
         assert payload['report_enhance_error'] == '结构变了'
 
     def test_record_error_tolerates_missing_summary(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(hooks, 'ROOT', tmp_path)
+        monkeypatch.setattr(hooks, 'reports_dir', lambda: tmp_path / 'reports')
         (tmp_path / 'reports').mkdir()
         hooks._record_enhance_error('boom')  # 不应抛
         payload = json.loads(
@@ -129,7 +129,7 @@ class TestEnhanceFailureVisible:
 
     def test_unconfigure_marks_failure_in_report_and_summary(self, tmp_path, monkeypatch):
         """增强失败：测试结论不变，但报告横幅与 run_summary 都必须留痕。"""
-        monkeypatch.setattr(hooks, 'ROOT', tmp_path)
+        monkeypatch.setattr(hooks, 'reports_dir', lambda: tmp_path / 'reports')
         reports = tmp_path / 'reports'
         reports.mkdir()
         (reports / 'run_summary.json').write_text(json.dumps({'passed': 1}), encoding='utf-8')

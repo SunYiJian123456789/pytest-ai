@@ -9,7 +9,7 @@ import keyword
 import sys
 from pathlib import Path
 
-from framework.config import ROOT
+from framework.config import workspace_root
 
 TEMPLATE_DIR = Path(__file__).resolve().parent / 'project_template'
 
@@ -21,7 +21,7 @@ def create(project: str, *, base_url: str = 'http://127.0.0.1:8080',
     if project.startswith('_') or project in ('framework', 'projects', 'reports'):
         raise ValueError('项目名与保留目录冲突：%r' % project)
 
-    target = ROOT / 'projects' / project
+    target = workspace_root() / 'projects' / project
     if target.exists() and not force:
         raise FileExistsError('项目目录已存在：%s（如需覆盖请加 --force）' % target)
 

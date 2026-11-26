@@ -275,7 +275,7 @@ class TestCli:
 
     def test_project_derives_ledger_without_business_hardcode(self, tmp_path, monkeypatch, capsys):
         """内核不认识 shopping：--project 按约定路径推导台账。"""
-        monkeypatch.setattr(defects, 'ROOT', tmp_path)
+        monkeypatch.setattr(defects, 'workspace_root', lambda: tmp_path)
         ledger = tmp_path / 'projects' / 'demo' / 'data' / 'known_defects.yaml'
         ledger.parent.mkdir(parents=True)
         ledger.write_text(_write_ledger(tmp_path).read_text(encoding='utf-8'), encoding='utf-8')
@@ -285,7 +285,7 @@ class TestCli:
         assert 'shopping' not in defects.ledger_for_project('demo').as_posix()
 
     def test_explicit_ledger_wins_over_project(self, tmp_path, monkeypatch, capsys):
-        monkeypatch.setattr(defects, 'ROOT', tmp_path)
+        monkeypatch.setattr(defects, 'workspace_root', lambda: tmp_path)
         explicit = _write_ledger(tmp_path)
         code = defects.main(['--ledger', str(explicit), '--project', 'demo',
                              '--format', 'json'])
@@ -333,7 +333,7 @@ class TestManifestShards:
 
     def test_merge_shards_into_main_manifest(self, tmp_path, monkeypatch):
         from framework import hooks
-        monkeypatch.setattr(hooks, 'ROOT', tmp_path)
+        monkeypatch.setattr(hooks, 'reports_dir', lambda: tmp_path / 'reports')
         reports = tmp_path / 'reports'
         reports.mkdir()
         manifest = _manifest(['a', 'b'], [_xfail('a')])
@@ -350,7 +350,7 @@ class TestManifestShards:
 
     def test_bad_shard_is_ignored_and_cleaned(self, tmp_path, monkeypatch):
         from framework import hooks
-        monkeypatch.setattr(hooks, 'ROOT', tmp_path)
+        monkeypatch.setattr(hooks, 'reports_dir', lambda: tmp_path / 'reports')
         reports = tmp_path / 'reports'
         reports.mkdir()
         (reports / '.xfail_manifest_gw0.json').write_text('{broken', encoding='utf-8')
@@ -360,7 +360,7 @@ class TestManifestShards:
 
     def test_project_shards_do_not_leak(self, tmp_path, monkeypatch):
         from framework import hooks
-        monkeypatch.setattr(hooks, 'ROOT', tmp_path)
+        monkeypatch.setattr(hooks, 'reports_dir', lambda: tmp_path / 'reports')
         monkeypatch.setattr(state, 'defects_project', 'shopping')
         reports = tmp_path / 'reports'
         reports.mkdir()

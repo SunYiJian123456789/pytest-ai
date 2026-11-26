@@ -30,7 +30,7 @@ from pathlib import Path
 
 import yaml
 
-from framework.config import ROOT
+from framework.config import workspace_root
 
 _ID_PATTERN = re.compile(r'^DEF-\d{3,}$')
 VALID_STATUS = ('open', 'fixed')
@@ -46,7 +46,7 @@ def ledger_for_project(project: str) -> Path:
 
     这是路径约定，不是业务知识——换系统只需传入不同的项目名。
     """
-    return ROOT / 'projects' / project / 'data' / 'known_defects.yaml'
+    return workspace_root() / 'projects' / project / 'data' / 'known_defects.yaml'
 
 
 def configure(path: str | Path | None, *, project: str | None = None) -> None:

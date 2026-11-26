@@ -7,7 +7,8 @@
 
 from framework.auth import AuthSpec
 from framework.client import ApiClient, ApiResult, Envelope
-from framework.config import ROOT, Settings, env
+from framework.config import (ROOT, PACKAGE_ROOT, WORKSPACE_ROOT, Settings, env,
+                              package_root, reports_dir, workspace_root)
 from framework.data import cases, load, records
 from framework.extract import CaseContext, extract, extract_many
 from framework.permissions import PermissionRow, check_permission, run_matrix
@@ -17,7 +18,8 @@ from framework.schema import assert_data_schema, assert_schema, schema_from_yaml
 
 __all__ = [
     'ApiClient', 'ApiResult', 'Envelope', 'AuthSpec',
-    'ROOT', 'Settings', 'env',
+    'ROOT', 'PACKAGE_ROOT', 'WORKSPACE_ROOT', 'Settings', 'env',
+    'package_root', 'reports_dir', 'workspace_root',
     'cases', 'load', 'records',
     'CaseContext', 'extract', 'extract_many',
     'PermissionRow', 'check_permission', 'run_matrix',

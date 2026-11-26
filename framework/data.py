@@ -16,15 +16,17 @@ from typing import Any
 
 import yaml
 
-from framework.config import ROOT
+from framework.config import workspace_root
 
-# 默认数据集路径；业务项目应通过 file_path 参数指向自己的 data/api_cases.yaml
-DATA_FILE = ROOT / 'test_data' / 'api_cases.yaml'
+# 默认数据集路径；业务项目应通过 file_path 参数指向自己的 data/api_cases.yaml。
+# 用函数动态取工作区根，避免 pip 安装后把路径固定在 site-packages。
+def _default_data_file() -> Path:
+    return workspace_root() / 'test_data' / 'api_cases.yaml'
 
 
 def load(file_path: str | Path | None = None) -> dict[str, Any]:
     """读取整个 YAML 文件，校验顶层为映射。"""
-    path = Path(file_path) if file_path else DATA_FILE
+    path = Path(file_path) if file_path else _default_data_file()
     with path.open(encoding='utf-8') as handle:
         data = yaml.safe_load(handle)
     if not isinstance(data, dict):

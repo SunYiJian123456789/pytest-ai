@@ -1,3 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pytest-ai-framework"
+version = "0.1.0"
+description = "可复用的接口自动化内核（pytest + requests，业务无感）"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pytest>=8,<10",
+    "pytest-html>=4,<5",
+    "pytest-xdist>=3,<4",
+    "requests>=2.31,<3",
+    "PyYAML>=6,<7",
+    "jsonschema>=4,<5",
+    "PyMySQL>=1,<2",
+]
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+include = ["framework*"]
+namespaces = false
+
+# 脚手架模板不是 .py，必须显式声明，否则 wheel 里没有 .tpl，
+# 安装后 python -m framework.scaffold 会因找不到模板而失败。
+[tool.setuptools.package-data]
+framework = ["project_template/**/*.tpl"]
+
 # 工程门禁：静态检查（ruff）配置；测试配置见 pytest.ini
 [tool.ruff]
 line-length = 120

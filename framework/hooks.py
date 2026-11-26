@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 from framework.cleanup import inject_banner
-from framework.config import ROOT, env
+from framework.config import env, reports_dir, set_workspace_root
 from framework.preflight import records as preflight_records
 from framework.state import state
 
@@ -34,7 +34,12 @@ def configure_report(**options):
 
 
 def pytest_configure(config):
-    """`--collect-only` 不覆盖正式报告；xdist worker 记录清理日志供主进程汇总。"""
+    """校准工作区根；`--collect-only` 不覆盖正式报告；worker 记录清理日志供主进程汇总。
+
+    pip 安装后包在 site-packages，import 期的工作区只能靠 cwd 猜测；这里用 pytest
+    的 rootdir 校准一次，保证 reports / .env / 收集清单都落在调用方工作区。
+    """
+    set_workspace_root(config.rootpath)
     if config.getoption('collectonly', default=False):
         config.option.htmlpath = str(
             Path(tempfile.gettempdir()) / 'api-automation-collect-only-report.html'
@@ -66,11 +71,11 @@ def pytest_collection_modifyitems(items, config):
     from framework.defects import collect_manifest, write_manifest
     worker = getattr(config, 'workerinput', None)
     project = state.defects_project
-    reports_dir = ROOT / 'reports'
-    target = (reports_dir / ('.%sxfail_manifest_%s.json'
+    root = reports_dir()
+    target = (root / ('.%sxfail_manifest_%s.json'
                              % ('%s_' % project if project else '',
                                 worker.get('workerid', 'worker')))
-              if worker else reports_dir / _manifest_name(project))
+              if worker else root / _manifest_name(project))
     try:
         write_manifest(collect_manifest(items), target)
     except OSError:  # 沉淀失败不影响测试结论
@@ -79,7 +84,7 @@ def pytest_collection_modifyitems(items, config):
 
 def _merge_manifest_shards():
     """主进程汇总 worker 分片；任取一份完整清单即可，随后删除分片。"""
-    root = ROOT / 'reports'
+    root = reports_dir()
     project = state.defects_project
     shards = sorted(root.glob(_shard_pattern(project)))
     if not shards:
@@ -115,7 +120,7 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     # 体检中止时用例零执行，此时扫库只会产生误导性 FAIL，直接跳过。
     from framework.cleanup import run_sweeps
     from framework.preflight import aborted
-    state.load_workers(ROOT / 'reports')
+    state.load_workers(reports_dir())
     sweep_rows = [] if aborted() else run_sweeps()
     _merge_manifest_shards()
     stats = terminalreporter.stats
@@ -158,12 +163,12 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
                                            render_markdown, render_terminal)
             ledger = load_ledger(state.defects_ledger)
             manifest = load_manifest(
-                ROOT / 'reports' / _manifest_name(state.defects_project))
+                reports_dir() / _manifest_name(state.defects_project))
             result = check(ledger, manifest)
             summary['known_defects'] = dict(result['stats'], ok=result['ok'])
-            reports_dir = ROOT / 'reports'
-            reports_dir.mkdir(parents=True, exist_ok=True)
-            (reports_dir / 'known_defects.md').write_text(
+            root = reports_dir()
+            root.mkdir(parents=True, exist_ok=True)
+            (root / 'known_defects.md').write_text(
                 render_markdown(ledger, result), encoding='utf-8')
             terminalreporter.write_line('')
             for line in render_terminal(result).splitlines():
@@ -172,7 +177,7 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
             summary['known_defects_error'] = str(exc)[:200]
 
     try:
-        target = ROOT / 'reports' / 'run_summary.json'
+        target = reports_dir() / 'run_summary.json'
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(
             json.dumps(summary, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -187,7 +192,7 @@ def _record_enhance_error(error: str) -> None:
     读改写一次，追加 ``report_enhance_error`` 字段。写失败只告警，
     不再往 REPORT_ENHANCE_ERROR 里追加（避免重复记录）。
     """
-    target = ROOT / 'reports' / 'run_summary.json'
+    target = reports_dir() / 'run_summary.json'
     try:
         payload = json.loads(target.read_text(encoding='utf-8')) if target.exists() else {}
         payload['report_enhance_error'] = error
@@ -223,7 +228,7 @@ def _write_coverage(config):
         print('[coverage] 本轮没有任何请求，跳过覆盖率统计')
         return
     try:
-        report = coverage.collect_main(ROOT / 'reports')
+        report = coverage.collect_main(reports_dir())
     except Exception as exc:  # noqa: BLE001 - 覆盖率统计失败不应影响测试结论
         print('[coverage] 覆盖率统计失败：%s' % exc)
         return
@@ -242,10 +247,10 @@ def _write_coverage(config):
 def pytest_unconfigure(config):
     """worker 一次落盘全部分区；主进程合并后增强报告、注入汇总横幅并归档。"""
     if getattr(config, 'workerinput', None):
-        state.dump_worker(ROOT / 'reports', getattr(config, '_worker_id', 'worker'))
+        state.dump_worker(reports_dir(), getattr(config, '_worker_id', 'worker'))
         return
     # 一次合并全部已注册分区（清理记录 + 覆盖率命中），替代过去的两次手动 load
-    state.load_workers(ROOT / 'reports')
+    state.load_workers(reports_dir())
     if config.getoption('collectonly', default=False):
         return
     _write_coverage(config)
