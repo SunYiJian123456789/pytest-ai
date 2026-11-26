@@ -962,7 +962,7 @@ schema 必须是合法 Draft 7——错误直接报出契约名与字段，不�
 | 方向 | 实现 | 时机 |
 | --- | --- | --- |
 | 消费方校验 | `test_14_contract.py` 用 `assert_contract` 按契约校验真实响应；另有测试校验契约 method/path 已在接口清单登记 | 每次跑 pytest |
-| 提供方门禁 | `framework.contract check` 对比 `HEAD^` 基线，破坏性变更返回 1 | CI `Contract compatibility` 步骤 |
+| 提供方门禁 | `framework.contract check` 对比基线（push 取 `HEAD^1`、PR 取 `origin/<base_ref>`），破坏性变更返回 1 | CI `Contract compatibility` 步骤（checkout 需 `fetch-depth: 0`） |
 
 ### 破坏性变更判定
 

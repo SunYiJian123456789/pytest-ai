@@ -37,6 +37,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # fetch-depth=1 时 HEAD^1 不存在，契约门禁会误判「首次提交」而跳过对比。
+          # 完整历史保证基线提交与契约文件对象在本地可用；小仓库成本可忽略。
+          fetch-depth: 0
 
       # .env 不进版本库，CI 从 .env.example 生成一份默认配置；
       # 这样顺带验证「样例文件是否完备」——样例缺键会在这里直接暴露。
@@ -74,21 +78,52 @@ jobs:
           "$PYTHON" -m pytest framework/tests -o addopts= -q
 
       # 契约双向校验：消费方在 test_14_contract.py 按契约校验真实响应；
-      # 这里做提供方门禁——与上一版（HEAD^）契约对比，删字段/改类型/加必填/收紧约束直接失败。
-      # 新增可选字段、放宽约束放行；首次提交无基线时只做格式自检。
+      # 这里做提供方门禁——与基线契约对比，删字段/改类型/加必填/收紧约束直接失败。
+      # 新增可选字段、放宽约束放行。
+      # 基线来源按事件区分：
+      #   push / schedule / dispatch → HEAD^1（上一提交，需 checkout fetch-depth: 0）
+      #   pull_request              → origin/<base_ref>（目标分支，避免只比对 PR 内部提交）
+      # 拿不到基线必须显式告警并失败，不能再静默跳过造成「假绿」。
       - name: Contract compatibility (producer gate)
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
-          "$PYTHON" -m framework.contract validate --file projects/shopping/data/contracts.yaml
-          if git cat-file -e 'HEAD^:projects/shopping/data/contracts.yaml' 2>/dev/null; then
-            git show 'HEAD^:projects/shopping/data/contracts.yaml' > /tmp/contract_baseline.yaml
-            "$PYTHON" -m framework.contract check \
-              --current projects/shopping/data/contracts.yaml \
-              --baseline /tmp/contract_baseline.yaml | tee -a "$GITHUB_STEP_SUMMARY"
+          CONTRACT=projects/shopping/data/contracts.yaml
+          "$PYTHON" -m framework.contract validate --file "$CONTRACT"
+
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            BASELINE="origin/${BASE_REF}:${CONTRACT}"
+            LABEL="origin/${BASE_REF}"
           else
-            echo "首次提交契约（HEAD^ 无基线），跳过兼容性对比"
+            BASELINE="HEAD^1:${CONTRACT}"
+            LABEL="HEAD^1"
           fi
+
+          if ! git cat-file -e "$BASELINE" 2>/dev/null; then
+            # fetch-depth: 0 保证历史完整，此时取不到基线只有两种可能：
+            # ① 整个仓库真只有 1 个提交（首次提交）；② 基线提交里确实没有契约文件（契约首次引入）。
+            # 其余情况（如 fetch-depth 退化）都按失败处理，杜绝静默假绿。
+            COMMITS=$(git rev-list --count HEAD)
+            if [ "$COMMITS" -le 1 ]; then
+              echo "[contract] 仓库首次提交（$COMMITS 个提交），无基线可比，仅做格式自检" | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            if ! git cat-file -e "${LABEL}^{commit}" 2>/dev/null; then
+              echo "::error::契约门禁基线提交 ${LABEL} 不存在（共 $COMMITS 个提交），疑似 fetch-depth 不足或分支异常，拒绝跳过" | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+            # 基线提交存在但契约文件首次引入：新增不算破坏，放行但要显式留痕。
+            echo "[contract] 基线 ${LABEL} 中无契约文件（首次引入），跳过对比" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git show "$BASELINE" > /tmp/contract_baseline.yaml
+          echo "[contract] 基线来源：$LABEL" | tee -a "$GITHUB_STEP_SUMMARY"
+          "$PYTHON" -m framework.contract check \
+            --current "$CONTRACT" \
+            --baseline /tmp/contract_baseline.yaml | tee -a "$GITHUB_STEP_SUMMARY"
 
       # xfail 台账门禁：收集阶段即可校验，不必等用例执行。
       # 「修好后端忘删 xfail」→ 台账 fixed 但标记还在；「删了标记忘改台账」→ 反向报错；
